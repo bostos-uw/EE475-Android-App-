@@ -29,6 +29,9 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+    buildFeatures {
+        viewBinding = true
+    }
 }
 
 dependencies {
@@ -40,8 +43,7 @@ dependencies {
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)
-    implementation("com.google.android.material:material:1.12.0")
-    // already likely present
     implementation("androidx.navigation:navigation-fragment:2.8.3")
     implementation("androidx.navigation:navigation-ui:2.8.3")
+    implementation("com.github.PhilJay:MPAndroidChart:v3.1.0")
 }
