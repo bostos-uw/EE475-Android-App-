@@ -4,7 +4,7 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/light_gray"
+    android:background="#F5F5F7"
     tools:context=".HomeFragment">
 
     <androidx.constraintlayout.widget.ConstraintLayout
@@ -78,10 +78,11 @@
             <!-- Upper Back -->
             <androidx.cardview.widget.CardView
                 android:layout_width="0dp"
-                android:layout_height="wrap_content"
+                android:layout_height="match_parent"
                 android:layout_weight="1"
                 android:layout_marginEnd="8dp"
                 app:cardCornerRadius="16dp"
+                app:cardBackgroundColor="@color/white"
                 app:cardElevation="0dp">
 
                 <androidx.constraintlayout.widget.ConstraintLayout
@@ -91,9 +92,10 @@
 
                     <ImageView
                         android:id="@+id/upper_back_icon"
-                        android:layout_width="48dp"
-                        android:layout_height="48dp"
-                        android:src="@drawable/outline_account_circle_24"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:src="@android:drawable/arrow_up_float"
+                        app:tint="#4A90E2"
                         app:layout_constraintStart_toStartOf="parent"
                         app:layout_constraintTop_toTopOf="parent" />
 
@@ -120,16 +122,17 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:src="@android:drawable/ic_lock_idle_low_battery"
-                        app:tint="@android:color/holo_green_dark"
+                        app:tint="@color/green"
                         android:layout_marginTop="8dp"
                         app:layout_constraintTop_toBottomOf="@id/upper_back_sensor"
                         app:layout_constraintStart_toStartOf="parent"/>
 
                     <TextView
+                        android:id="@+id/upper_back_battery_percentage"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="85%"
-                        android:textColor="@android:color/holo_green_dark"
+                        android:textColor="@color/green"
                         android:layout_marginStart="4dp"
                         app:layout_constraintStart_toEndOf="@id/upper_back_battery_icon"
                         app:layout_constraintTop_toTopOf="@id/upper_back_battery_icon"
@@ -142,10 +145,11 @@
             <!-- Lower Back -->
             <androidx.cardview.widget.CardView
                 android:layout_width="0dp"
-                android:layout_height="wrap_content"
+                android:layout_height="match_parent"
                 android:layout_weight="1"
                 android:layout_marginStart="8dp"
                 app:cardCornerRadius="16dp"
+                app:cardBackgroundColor="@color/white"
                 app:cardElevation="0dp">
 
                 <androidx.constraintlayout.widget.ConstraintLayout
@@ -155,9 +159,10 @@
 
                     <ImageView
                         android:id="@+id/lower_back_icon"
-                        android:layout_width="48dp"
-                        android:layout_height="48dp"
-                        android:src="@drawable/outline_account_circle_24"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:src="@android:drawable/arrow_down_float"
+                        app:tint="#7F4FE3"
                         app:layout_constraintStart_toStartOf="parent"
                         app:layout_constraintTop_toTopOf="parent" />
 
@@ -184,16 +189,17 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:src="@android:drawable/ic_lock_idle_low_battery"
-                        app:tint="@android:color/holo_green_dark"
+                        app:tint="@color/green"
                         android:layout_marginTop="8dp"
                         app:layout_constraintTop_toBottomOf="@id/lower_back_sensor"
                         app:layout_constraintStart_toStartOf="parent"/>
 
                     <TextView
+                        android:id="@+id/lower_back_battery_percentage"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="78%"
-                        android:textColor="@android:color/holo_green_dark"
+                        android:textColor="@color/green"
                         android:layout_marginStart="4dp"
                         app:layout_constraintStart_toEndOf="@id/lower_back_battery_icon"
                         app:layout_constraintTop_toTopOf="@id/lower_back_battery_icon"
@@ -205,6 +211,28 @@
 
         </LinearLayout>
 
+        <Button
+            android:id="@+id/connect_button"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:text="Connect"
+            android:backgroundTint="@color/white"
+            android:textColor="@color/black"
+            android:layout_marginTop="16dp"
+            app:layout_constraintTop_toBottomOf="@id/sensor_widgets"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent" />
+
+        <TextView
+            android:id="@+id/connection_status_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Disconnected"
+            app:layout_constraintTop_toBottomOf="@id/connect_button"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent" />
+
         <!-- Daily Goal -->
         <androidx.cardview.widget.CardView
             android:id="@+id/daily_goal_widget"
@@ -212,8 +240,9 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
             app:cardCornerRadius="16dp"
+            app:cardBackgroundColor="@color/white"
             app:cardElevation="0dp"
-            app:layout_constraintTop_toBottomOf="@id/sensor_widgets"
+            app:layout_constraintTop_toBottomOf="@id/connection_status_text"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent">
 
@@ -308,10 +337,11 @@
             <!-- Active Time -->
             <androidx.cardview.widget.CardView
                 android:layout_width="0dp"
-                android:layout_height="wrap_content"
+                android:layout_height="match_parent"
                 android:layout_weight="1"
                 android:layout_marginEnd="8dp"
                 app:cardCornerRadius="16dp"
+                app:cardBackgroundColor="@color/white"
                 app:cardElevation="0dp">
 
                 <androidx.constraintlayout.widget.ConstraintLayout
@@ -329,12 +359,13 @@
 
                     <ImageView
                         android:id="@+id/active_time_icon"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
+                        android:layout_width="24dp"
+                        android:layout_height="24dp"
                         android:src="@android:drawable/ic_menu_recent_history"
                         app:tint="@android:color/holo_blue_dark"
-                        app:layout_constraintStart_toStartOf="parent"
-                        app:layout_constraintTop_toBottomOf="@id/active_time_title"/>
+                        android:layout_marginTop="8dp"
+                        app:layout_constraintTop_toBottomOf="@id/active_time_title"
+                        app:layout_constraintStart_toStartOf="parent" />
 
                     <TextView
                         android:id="@+id/active_time_value"
@@ -343,16 +374,13 @@
                         android:text="0"
                         android:textSize="24sp"
                         android:textStyle="bold"
-                        android:layout_marginStart="8dp"
-                        app:layout_constraintStart_toEndOf="@id/active_time_icon"
-                        app:layout_constraintTop_toTopOf="@id/active_time_icon"
-                        app:layout_constraintBottom_toBottomOf="@id/active_time_icon"/>
-
-                    <TextView
+                        app:layout_constraintStart_toStartOf="parent"
+                        app:layout_constraintTop_toBottomOf="@id/active_time_icon"/>
+                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="minutes"
-                        app:layout_constraintStart_toStartOf="@id/active_time_value"
+                        app:layout_constraintStart_toStartOf="parent"
                         app:layout_constraintTop_toBottomOf="@id/active_time_value"/>
 
 
@@ -363,10 +391,11 @@
             <!-- Upright -->
             <androidx.cardview.widget.CardView
                 android:layout_width="0dp"
-                android:layout_height="wrap_content"
+                android:layout_height="match_parent"
                 android:layout_weight="1"
                 android:layout_marginStart="8dp"
                 app:cardCornerRadius="16dp"
+                app:cardBackgroundColor="@color/white"
                 app:cardElevation="0dp">
 
                 <androidx.constraintlayout.widget.ConstraintLayout
@@ -384,12 +413,13 @@
 
                     <ImageView
                         android:id="@+id/upright_icon"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
+                        android:layout_width="24dp"
+                        android:layout_height="24dp"
                         android:src="@drawable/outline_analytics_24"
-                        app:tint="@android:color/holo_green_dark"
-                        app:layout_constraintStart_toStartOf="parent"
-                        app:layout_constraintTop_toBottomOf="@id/upright_title"/>
+                        app:tint="@color/green"
+                        android:layout_marginTop="8dp"
+                        app:layout_constraintTop_toBottomOf="@id/upright_title"
+                        app:layout_constraintStart_toStartOf="parent"/>
 
                     <TextView
                         android:id="@+id/upright_value"
@@ -398,17 +428,15 @@
                         android:text="0%"
                         android:textSize="24sp"
                         android:textStyle="bold"
-                        android:textColor="@android:color/holo_green_dark"
-                        android:layout_marginStart="8dp"
-                        app:layout_constraintStart_toEndOf="@id/upright_icon"
-                        app:layout_constraintTop_toTopOf="@id/upright_icon"
-                        app:layout_constraintBottom_toBottomOf="@id/upright_icon"/>
+                        android:textColor="@color/green"
+                        app:layout_constraintStart_toStartOf="parent"
+                        app:layout_constraintTop_toBottomOf="@id/upright_icon"/>
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="of today"
-                        app:layout_constraintStart_toStartOf="@id/upright_value"
+                        app:layout_constraintStart_toStartOf="parent"
                         app:layout_constraintTop_toBottomOf="@id/upright_value"/>
 
                 </androidx.constraintlayout.widget.ConstraintLayout>
