@@ -93,6 +93,7 @@
                 android:text="Upright time goal (minutes)" />
 
             <EditText
+                android:id="@+id/goal_input"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
@@ -102,12 +103,14 @@
                 android:padding="12dp" />
 
             <TextView
+                android:id="@+id/goal_text_preview"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
                 android:text="1h 0m per day" />
 
             <Button
+                android:id="@+id/save_goal_button"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
@@ -204,18 +207,20 @@
                         android:textStyle="bold" />
 
                     <TextView
+                        android:id="@+id/upper_back_status_text"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Connected"
-                        android:textColor="#4CAF50" />
+                        android:text="Not Connected"
+                        android:textColor="@color/ios_red" />
                 </LinearLayout>
 
                 <View
+                    android:id="@+id/upper_back_status_indicator"
                     android:layout_width="8dp"
                     android:layout_height="8dp"
                     android:layout_alignParentEnd="true"
                     android:layout_centerVertical="true"
-                    android:background="@drawable/connected_dot" />
+                    android:background="@drawable/disconnected_dot" />
 
             </RelativeLayout>
 
@@ -242,18 +247,20 @@
                         android:textStyle="bold" />
 
                     <TextView
+                        android:id="@+id/lower_back_status_text"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Connected"
-                        android:textColor="#4CAF50" />
+                        android:text="Not Connected"
+                        android:textColor="@color/ios_red" />
                 </LinearLayout>
 
                 <View
+                    android:id="@+id/lower_back_status_indicator"
                     android:layout_width="8dp"
                     android:layout_height="8dp"
                     android:layout_alignParentEnd="true"
                     android:layout_centerVertical="true"
-                    android:background="@drawable/connected_dot" />
+                    android:background="@drawable/disconnected_dot" />
 
             </RelativeLayout>
 

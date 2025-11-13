@@ -4,7 +4,7 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="?android:attr/colorBackground"
+    android:background="@color/ios_background"
     tools:context=".AnalyticsFragment">
 
     <androidx.constraintlayout.widget.ConstraintLayout
@@ -21,8 +21,8 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="@string/analytics"
-            android:textColor="?android:attr/textColorPrimary"
-            android:textSize="28sp"
+            android:textColor="@color/ios_text_primary"
+            android:textSize="34sp"
             android:textStyle="bold"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent" />
@@ -32,8 +32,8 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="@string/your_posture_insights"
-            android:textColor="?android:attr/textColorSecondary"
-            android:textSize="16sp"
+            android:textColor="@color/ios_text_secondary"
+            android:textSize="17sp"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@id/tv_analytics_title" />
 
@@ -55,9 +55,9 @@
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="8dp"
                 android:layout_weight="1"
-                app:cardBackgroundColor="@color/light_blue_card_background"
-                app:cardCornerRadius="16dp"
-                app:cardElevation="0dp">
+                app:cardBackgroundColor="@color/ios_card_background"
+                app:cardCornerRadius="12dp"
+                app:cardElevation="4dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -70,21 +70,22 @@
                         android:layout_width="24dp"
                         android:layout_height="24dp"
                         android:contentDescription="@string/ic_daily_avg_description"
-                        android:src="@drawable/ic_daily_avg" />
+                        android:src="@drawable/ic_daily_avg"
+                        app:tint="@color/ios_blue" />
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
                         android:text="@string/daily_avg"
-                        android:textColor="?android:attr/textColorSecondary"
+                        android:textColor="@color/ios_text_secondary"
                         android:textSize="12sp" />
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="@string/daily_avg_value"
-                        android:textColor="?android:attr/textColorPrimary"
+                        android:textColor="@color/ios_blue"
                         android:textSize="18sp"
                         android:textStyle="bold" />
                 </LinearLayout>
@@ -96,9 +97,9 @@
                 android:layout_height="wrap_content"
                 android:layout_marginHorizontal="8dp"
                 android:layout_weight="1"
-                app:cardBackgroundColor="@color/light_purple_card_background"
-                app:cardCornerRadius="16dp"
-                app:cardElevation="0dp">
+                app:cardBackgroundColor="@color/ios_card_background"
+                app:cardCornerRadius="12dp"
+                app:cardElevation="4dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -111,21 +112,22 @@
                         android:layout_width="24dp"
                         android:layout_height="24dp"
                         android:contentDescription="@string/ic_total_description"
-                        android:src="@drawable/ic_total" />
+                        android:src="@drawable/ic_total"
+                        app:tint="@color/ios_purple" />
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
                         android:text="@string/total"
-                        android:textColor="?android:attr/textColorSecondary"
+                        android:textColor="@color/ios_text_secondary"
                         android:textSize="12sp" />
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="@string/total_value"
-                        android:textColor="?android:attr/textColorPrimary"
+                        android:textColor="@color/ios_purple"
                         android:textSize="18sp"
                         android:textStyle="bold" />
                 </LinearLayout>
@@ -137,9 +139,9 @@
                 android:layout_height="wrap_content"
                 android:layout_marginStart="8dp"
                 android:layout_weight="1"
-                app:cardBackgroundColor="@color/light_green_card_background"
-                app:cardCornerRadius="16dp"
-                app:cardElevation="0dp">
+                app:cardBackgroundColor="@color/ios_card_background"
+                app:cardCornerRadius="12dp"
+                app:cardElevation="4dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -152,21 +154,22 @@
                         android:layout_width="24dp"
                         android:layout_height="24dp"
                         android:contentDescription="@string/ic_best_day_description"
-                        android:src="@drawable/ic_best_day" />
+                        android:src="@drawable/ic_best_day"
+                        app:tint="@color/ios_green" />
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
                         android:text="@string/best_day"
-                        android:textColor="?android:attr/textColorSecondary"
+                        android:textColor="@color/ios_text_secondary"
                         android:textSize="12sp" />
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="@string/best_day_value"
-                        android:textColor="?android:attr/textColorPrimary"
+                        android:textColor="@color/ios_green"
                         android:textSize="18sp"
                         android:textStyle="bold" />
                 </LinearLayout>
@@ -179,10 +182,10 @@
             android:id="@+id/weekly_overview_card"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            app:cardBackgroundColor="?android:attr/colorBackground"
-            app:cardCornerRadius="16dp"
-            app:cardElevation="0dp"
+            android:layout_marginTop="24dp"
+            app:cardBackgroundColor="@color/ios_card_background"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="4dp"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@id/insights_layout">
@@ -200,8 +203,9 @@
                     android:drawablePadding="8dp"
                     android:gravity="center_vertical"
                     android:text="@string/weekly_overview"
-                    android:textColor="?android:attr/textColorPrimary"
-                    android:textSize="18sp"
+                    android:textColor="@color/ios_text_primary"
+                    android:drawableTint="@color/ios_text_secondary"
+                    android:textSize="22sp"
                     android:textStyle="bold" />
 
                 <com.github.mikephil.charting.charts.BarChart
@@ -219,10 +223,10 @@
             android:id="@+id/posture_distribution_card"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            app:cardBackgroundColor="?android:attr/colorBackground"
-            app:cardCornerRadius="16dp"
-            app:cardElevation="0dp"
+            android:layout_marginTop="24dp"
+            app:cardBackgroundColor="@color/ios_card_background"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="4dp"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@id/weekly_overview_card">
@@ -240,8 +244,9 @@
                     android:drawablePadding="8dp"
                     android:gravity="center_vertical"
                     android:text="@string/posture_distribution"
-                    android:textColor="?android:attr/textColorPrimary"
-                    android:textSize="18sp"
+                    android:textColor="@color/ios_text_primary"
+                    android:drawableTint="@color/ios_text_secondary"
+                    android:textSize="22sp"
                     android:textStyle="bold"
                     app:layout_constraintStart_toStartOf="parent"
                     app:layout_constraintTop_toTopOf="parent" />
@@ -261,7 +266,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/pie_center_percentage"
-                    android:textColor="?android:attr/textColorPrimary"
+                    android:textColor="@color/ios_text_primary"
                     android:textSize="28sp"
                     android:textStyle="bold"
                     app:layout_constraintBottom_toTopOf="@+id/tv_pie_center_subtitle"
@@ -275,7 +280,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/overall_upright_time"
-                    android:textColor="?android:attr/textColorSecondary"
+                    android:textColor="@color/ios_text_secondary"
                     android:textSize="14sp"
                     app:layout_constraintBottom_toBottomOf="@id/pie_chart"
                     app:layout_constraintEnd_toEndOf="@id/pie_chart"
@@ -288,10 +293,10 @@
                     android:id="@+id/upright_info_card"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
+                    android:layout_marginTop="16dp"
                     android:layout_marginEnd="8dp"
                     app:cardBackgroundColor="@color/light_blue_card_background"
-                    app:cardCornerRadius="16dp"
+                    app:cardCornerRadius="10dp"
                     app:cardElevation="0dp"
                     app:layout_constraintEnd_toStartOf="@+id/slouch_info_card"
                     app:layout_constraintStart_toStartOf="parent"
@@ -308,14 +313,14 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="@string/upright"
-                            android:textColor="?android:attr/textColorSecondary"
+                            android:textColor="@color/ios_text_secondary"
                             android:textSize="14sp" />
 
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="@string/upright_value"
-                            android:textColor="?android:attr/textColorPrimary"
+                            android:textColor="@color/ios_blue"
                             android:textSize="20sp"
                             android:textStyle="bold" />
                     </LinearLayout>
@@ -326,9 +331,9 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="8dp"
-                    android:layout_marginTop="8dp"
+                    android:layout_marginTop="16dp"
                     app:cardBackgroundColor="@color/light_yellow_card_background"
-                    app:cardCornerRadius="16dp"
+                    app:cardCornerRadius="10dp"
                     app:cardElevation="0dp"
                     app:layout_constraintEnd_toEndOf="parent"
                     app:layout_constraintStart_toEndOf="@id/upright_info_card"
@@ -345,14 +350,14 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="@string/slouch"
-                            android:textColor="?android:attr/textColorSecondary"
+                            android:textColor="@color/ios_text_secondary"
                             android:textSize="14sp" />
 
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="@string/slouch_value"
-                            android:textColor="?android:attr/textColorPrimary"
+                            android:textColor="@color/ios_orange"
                             android:textSize="20sp"
                             android:textStyle="bold" />
                     </LinearLayout>

@@ -4,11 +4,22 @@
     <color name="chart_orange">#FBBC05</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
-    <color name="light_blue_card_background">#E6E9FF</color>
-    <color name="light_purple_card_background">#F5E6FF</color>
-    <color name="light_green_card_background">#E6FFE8</color>
-    <color name="light_yellow_card_background">#FFF8E1</color>
+    <color name="light_blue_card_background">#E8EAF6</color>
+    <color name="light_purple_card_background">#F3E5F5</color>
+    <color name="light_green_card_background">#E8F5E9</color>
+    <color name="light_yellow_card_background">#FFFDE7</color>
     <color name="orange">#FFA500</color>
     <color name="light_gray">#D3D3D3</color>
     <color name="green">#4CAF50</color>
+
+    <!-- iOS Style Colors -->
+    <color name="ios_blue">#0A84FF</color>
+    <color name="ios_purple">#BF5AF2</color>
+    <color name="ios_green">#32D74B</color>
+    <color name="ios_orange">#FF9F0A</color>
+    <color name="ios_text_primary">#000000</color>
+    <color name="ios_text_secondary">#8E8E93</color>
+    <color name="ios_background">#F2F2F7</color>
+    <color name="ios_card_background">#FFFFFF</color>
+    <color name="ios_red">#FF3B30</color>
 </resources>

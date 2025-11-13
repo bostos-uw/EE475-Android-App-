@@ -18,7 +18,6 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProvider;
@@ -27,10 +26,10 @@ public class HomeFragment extends Fragment {
 
     private TextView dailyGoalMinutes;
     private SharedPreferences sharedPreferences;
-    private SharedPreferences.OnSharedPreferenceChangeListener sharedPreferenceChangeListener;
     private Button connectButton;
     private TextView connectionStatusText;
     private BluetoothViewModel bluetoothViewModel;
+    private SharedViewModel sharedViewModel;
 
     private final ActivityResultLauncher<String[]> requestPermissionLauncher = registerForActivityResult(
             new ActivityResultContracts.RequestMultiplePermissions(),
@@ -71,35 +70,49 @@ public class HomeFragment extends Fragment {
         connectButton = view.findViewById(R.id.connect_button);
         connectionStatusText = view.findViewById(R.id.connection_status_text);
 
-        sharedPreferences = requireActivity().getSharedPreferences("user_prefs", Context.MODE_PRIVATE);
+        sharedPreferences = requireActivity().getSharedPreferences("user_goals", Context.MODE_PRIVATE);
 
-        loadDailyGoal();
-
-        sharedPreferenceChangeListener = (sharedPreferences, key) -> {
-            if (key.equals("daily_goal")) {
-                loadDailyGoal();
+        // Use SharedViewModel to observe goal changes
+        sharedViewModel = new ViewModelProvider(requireActivity()).get(SharedViewModel.class);
+        sharedViewModel.getDailyGoal().observe(getViewLifecycleOwner(), goal -> {
+            if (goal != null) {
+                updateDailyGoal(goal);
             }
-        };
-        sharedPreferences.registerOnSharedPreferenceChangeListener(sharedPreferenceChangeListener);
-
-        bluetoothViewModel = new ViewModelProvider(this).get(BluetoothViewModel.class);
-        bluetoothViewModel.getConnectionStatus().observe(getViewLifecycleOwner(), status -> {
-            connectionStatusText.setText(status);
         });
 
-        connectButton.setOnClickListener(v -> {
-            requestBluetoothPermissions();
-        });
+        // Load the initial goal from SharedPreferences
+        updateDailyGoal(sharedPreferences.getInt("daily_goal", 60));
+
+        bluetoothViewModel = new ViewModelProvider(requireActivity()).get(BluetoothViewModel.class);
+
+        // Set initial button state
+        updateButtonState(bluetoothViewModel.getConnectionStatus().getValue());
+
+        bluetoothViewModel.getConnectionStatus().observe(getViewLifecycleOwner(), this::updateButtonState);
     }
 
-    @Override
-    public void onDestroyView() {
-        super.onDestroyView();
-        sharedPreferences.unregisterOnSharedPreferenceChangeListener(sharedPreferenceChangeListener);
+    private void updateButtonState(String status) {
+        connectionStatusText.setText(status);
+        if (status == null) {
+            status = "Disconnected";
+        }
+
+        if (status.equals("Scanning...")) {
+            connectButton.setText("Cancel");
+            connectButton.setOnClickListener(v -> bluetoothViewModel.cancelScan());
+        } else if (status.startsWith("Connecting to")) {
+            connectButton.setText("Cancel");
+            connectButton.setOnClickListener(v -> bluetoothViewModel.disconnect());
+        } else if (status.startsWith("Connected to")) {
+            connectButton.setText("Disconnect");
+            connectButton.setOnClickListener(v -> bluetoothViewModel.disconnect());
+        } else { // Primarily "Disconnected"
+            connectButton.setText("Connect");
+            connectButton.setOnClickListener(v -> requestBluetoothPermissions());
+        }
     }
 
-    private void loadDailyGoal() {
-        int dailyGoal = sharedPreferences.getInt("daily_goal", 60);
+    private void updateDailyGoal(int dailyGoal) {
         dailyGoalMinutes.setText("of " + dailyGoal + " minutes");
     }
 
