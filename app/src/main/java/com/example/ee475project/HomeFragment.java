@@ -27,6 +27,7 @@ public class HomeFragment extends Fragment {
     private TextView dailyGoalMinutes;
     private SharedPreferences sharedPreferences;
     private Button connectButton;
+    private Button connectCycleButton;
     private TextView connectionStatusText;
     private BluetoothViewModel bluetoothViewModel;
     private SharedViewModel sharedViewModel;
@@ -68,6 +69,7 @@ public class HomeFragment extends Fragment {
 
         dailyGoalMinutes = view.findViewById(R.id.daily_goal_minutes);
         connectButton = view.findViewById(R.id.connect_button);
+        connectCycleButton = view.findViewById(R.id.connect_cycle_button);
         connectionStatusText = view.findViewById(R.id.connection_status_text);
 
         sharedPreferences = requireActivity().getSharedPreferences("user_goals", Context.MODE_PRIVATE);
@@ -89,6 +91,10 @@ public class HomeFragment extends Fragment {
         updateButtonState(bluetoothViewModel.getConnectionStatus().getValue());
 
         bluetoothViewModel.getConnectionStatus().observe(getViewLifecycleOwner(), this::updateButtonState);
+
+        connectCycleButton.setOnClickListener(v -> {
+            bluetoothViewModel.startCycle();
+        });
     }
 
     private void updateButtonState(String status) {
@@ -97,18 +103,28 @@ public class HomeFragment extends Fragment {
             status = "Disconnected";
         }
 
-        if (status.equals("Scanning...")) {
+        if (status.startsWith("Scanning for") || status.equals("Scanning...")) {
             connectButton.setText("Cancel");
             connectButton.setOnClickListener(v -> bluetoothViewModel.cancelScan());
+            connectCycleButton.setText("Stop Cycling");
+            connectCycleButton.setOnClickListener(v -> bluetoothViewModel.disconnect());
         } else if (status.startsWith("Connecting to")) {
             connectButton.setText("Cancel");
             connectButton.setOnClickListener(v -> bluetoothViewModel.disconnect());
+            connectCycleButton.setText("Stop Cycling");
+            connectCycleButton.setOnClickListener(v -> bluetoothViewModel.disconnect());
         } else if (status.startsWith("Connected to")) {
             connectButton.setText("Disconnect");
             connectButton.setOnClickListener(v -> bluetoothViewModel.disconnect());
+            connectCycleButton.setText("Stop Cycling");
+            connectCycleButton.setOnClickListener(v -> bluetoothViewModel.disconnect());
         } else { // Primarily "Disconnected"
             connectButton.setText("Connect");
             connectButton.setOnClickListener(v -> requestBluetoothPermissions());
+            connectCycleButton.setText("Connect (Cycle)");
+            connectCycleButton.setOnClickListener(v -> {
+                bluetoothViewModel.startCycle();
+            });
         }
     }
 

@@ -32,13 +32,16 @@ public class BluetoothViewModel extends AndroidViewModel {
     private final MutableLiveData<Boolean> isConnected = new MutableLiveData<>(false);
     private BluetoothGatt bluetoothGatt;
 
-    private static final String DEVICE_NAME_1 = "XIAO_";
-    private static final String DEVICE_NAME_2 = "XIAO_Upper_Back";
-    private static final String DEVICE_NAME_3 = "XIAO_Lower_Back";
+    private static final String DEVICE_NAME_UPPER = "XIAO_Upper_Back";
+    private static final String DEVICE_NAME_LOWER = "XIAO_Lower_Back";
     private static final long SCAN_PERIOD = 10000; // Stops scanning after 10 seconds.
+    private static final long CONNECTION_TIME = 10000; // 10 seconds
 
     private final ScanCallback leScanCallback;
     private final Runnable stopScanRunnable;
+    private boolean isCycling = false;
+    private int currentDeviceIndex = 0;
+    private final String[] deviceNames = {DEVICE_NAME_UPPER, DEVICE_NAME_LOWER};
 
     public BluetoothViewModel(@NonNull Application application) {
         super(application);
@@ -51,10 +54,16 @@ public class BluetoothViewModel extends AndroidViewModel {
             public void onScanResult(int callbackType, ScanResult result) {
                 super.onScanResult(callbackType, result);
                 BluetoothDevice device = result.getDevice();
-                if (device != null && device.getName() != null && (device.getName().startsWith(DEVICE_NAME_1) || device.getName().startsWith(DEVICE_NAME_2) || device.getName().startsWith(DEVICE_NAME_3))) {
-                    handler.removeCallbacks(stopScanRunnable);
-                    bluetoothLeScanner.stopScan(leScanCallback);
-                    connectToDevice(device);
+                if (device != null && device.getName() != null) {
+                    if (isCycling && device.getName().equals(deviceNames[currentDeviceIndex])) {
+                        handler.removeCallbacks(stopScanRunnable);
+                        bluetoothLeScanner.stopScan(leScanCallback);
+                        connectToDevice(device);
+                    } else if (!isCycling && (device.getName().startsWith(DEVICE_NAME_UPPER) || device.getName().startsWith(DEVICE_NAME_LOWER))) {
+                        handler.removeCallbacks(stopScanRunnable);
+                        bluetoothLeScanner.stopScan(leScanCallback);
+                        connectToDevice(device);
+                    }
                 }
             }
         };
@@ -78,11 +87,11 @@ public class BluetoothViewModel extends AndroidViewModel {
     }
 
     public void startScan() {
+        isCycling = false;
         if (bluetoothLeScanner != null && !Boolean.TRUE.equals(isConnected.getValue())) { // prevent scan if already connected
             List<ScanFilter> filters = new ArrayList<>();
-            filters.add(new ScanFilter.Builder().setDeviceName(DEVICE_NAME_1).build());
-            filters.add(new ScanFilter.Builder().setDeviceName(DEVICE_NAME_2).build());
-            filters.add(new ScanFilter.Builder().setDeviceName(DEVICE_NAME_3).build());
+            filters.add(new ScanFilter.Builder().setDeviceName(DEVICE_NAME_UPPER).build());
+            filters.add(new ScanFilter.Builder().setDeviceName(DEVICE_NAME_LOWER).build());
 
             ScanSettings scanSettings = new ScanSettings.Builder()
                     .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
@@ -96,7 +105,32 @@ public class BluetoothViewModel extends AndroidViewModel {
         }
     }
 
+    public void startCycle() {
+        isCycling = true;
+        currentDeviceIndex = 0;
+        scanForNextDevice();
+    }
+
+    private void scanForNextDevice() {
+        if (!isCycling) return;
+
+        String deviceName = deviceNames[currentDeviceIndex];
+        List<ScanFilter> filters = new ArrayList<>();
+        filters.add(new ScanFilter.Builder().setDeviceName(deviceName).build());
+
+        ScanSettings scanSettings = new ScanSettings.Builder()
+                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .build();
+
+        bluetoothLeScanner.startScan(filters, scanSettings, leScanCallback);
+        connectionStatus.setValue("Scanning for " + deviceName);
+
+        // Stop scanning after a predefined scan period.
+        handler.postDelayed(stopScanRunnable, SCAN_PERIOD);
+    }
+
     public void cancelScan() {
+        isCycling = false;
         if (bluetoothLeScanner != null) {
             handler.removeCallbacks(stopScanRunnable);
             stopScanRunnable.run();
@@ -104,6 +138,7 @@ public class BluetoothViewModel extends AndroidViewModel {
     }
 
     public void disconnect() {
+        isCycling = false;
         if (bluetoothGatt != null) {
             bluetoothGatt.disconnect();
         }
@@ -125,12 +160,22 @@ public class BluetoothViewModel extends AndroidViewModel {
                 isConnected.postValue(true);
                 bluetoothGatt = gatt;
                 gatt.discoverServices();
+
+                if (isCycling) {
+                    handler.postDelayed(() -> gatt.disconnect(), CONNECTION_TIME);
+                }
+
             } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
-                connectionStatus.postValue("Disconnected");
+                connectionStatus.postValue("Disconnected from " + deviceName);
                 isConnected.postValue(false);
                 gatt.close();
                 if (bluetoothGatt == gatt) {
                     bluetoothGatt = null;
+                }
+
+                if (isCycling) {
+                    currentDeviceIndex = (currentDeviceIndex + 1) % deviceNames.length;
+                    handler.postDelayed(() -> scanForNextDevice(), 1000); // 1-second delay before scanning for the next device
                 }
             }
         }
