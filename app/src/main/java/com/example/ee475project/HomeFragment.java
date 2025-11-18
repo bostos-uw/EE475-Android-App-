@@ -5,7 +5,6 @@ import android.app.Activity;
 import android.bluetooth.BluetoothAdapter;
 import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -25,7 +24,6 @@ import androidx.lifecycle.ViewModelProvider;
 public class HomeFragment extends Fragment {
 
     private TextView dailyGoalMinutes;
-    private SharedPreferences sharedPreferences;
     private Button connectButton;
     private Button connectCycleButton;
     private TextView connectionStatusText;
@@ -72,8 +70,6 @@ public class HomeFragment extends Fragment {
         connectCycleButton = view.findViewById(R.id.connect_cycle_button);
         connectionStatusText = view.findViewById(R.id.connection_status_text);
 
-        sharedPreferences = requireActivity().getSharedPreferences("user_goals", Context.MODE_PRIVATE);
-
         // Use SharedViewModel to observe goal changes
         sharedViewModel = new ViewModelProvider(requireActivity()).get(SharedViewModel.class);
         sharedViewModel.getDailyGoal().observe(getViewLifecycleOwner(), goal -> {
@@ -81,9 +77,6 @@ public class HomeFragment extends Fragment {
                 updateDailyGoal(goal);
             }
         });
-
-        // Load the initial goal from SharedPreferences
-        updateDailyGoal(sharedPreferences.getInt("daily_goal", 60));
 
         bluetoothViewModel = new ViewModelProvider(requireActivity()).get(BluetoothViewModel.class);
 
@@ -153,9 +146,11 @@ public class HomeFragment extends Fragment {
     }
 
     private boolean hasPermissions(String[] permissions) {
-        for (String permission : permissions) {
-            if (ContextCompat.checkSelfPermission(requireContext(), permission) != PackageManager.PERMISSION_GRANTED) {
-                return false;
+        if (isAdded()) {
+            for (String permission : permissions) {
+                if (ContextCompat.checkSelfPermission(requireContext(), permission) != PackageManager.PERMISSION_GRANTED) {
+                    return false;
+                }
             }
         }
         return true;

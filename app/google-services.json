@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "344539661662",
+    "firebase_url": "https://ee475-back-posture-corrector-default-rtdb.firebaseio.com",
+    "project_id": "ee475-back-posture-corrector",
+    "storage_bucket": "ee475-back-posture-corrector.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:344539661662:android:bac8f124484dc98f5a3bcf",
+        "android_client_info": {
+          "package_name": "com.example.ee475project"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyApqVimA4VzUPP7H7f_6pDjpPwLQryrWaU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

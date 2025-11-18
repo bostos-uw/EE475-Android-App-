@@ -5,6 +5,8 @@ import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothGatt;
 import android.bluetooth.BluetoothGattCallback;
+import android.bluetooth.BluetoothGattCharacteristic;
+import android.bluetooth.BluetoothGattDescriptor;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
@@ -14,6 +16,8 @@ import android.bluetooth.le.ScanSettings;
 import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
+
 import androidx.annotation.NonNull;
 import androidx.lifecycle.AndroidViewModel;
 import androidx.lifecycle.LiveData;
@@ -21,6 +25,7 @@ import androidx.lifecycle.MutableLiveData;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 public class BluetoothViewModel extends AndroidViewModel {
 
@@ -30,12 +35,20 @@ public class BluetoothViewModel extends AndroidViewModel {
 
     private final MutableLiveData<String> connectionStatus = new MutableLiveData<>("Disconnected");
     private final MutableLiveData<Boolean> isConnected = new MutableLiveData<>(false);
+    private final MutableLiveData<ImuData> upperBackData = new MutableLiveData<>();
+    private final MutableLiveData<ImuData> lowerBackData = new MutableLiveData<>();
     private BluetoothGatt bluetoothGatt;
 
+    private static final String TAG = "BluetoothViewModel";
     private static final String DEVICE_NAME_UPPER = "XIAO_Upper_Back";
     private static final String DEVICE_NAME_LOWER = "XIAO_Lower_Back";
     private static final long SCAN_PERIOD = 10000; // Stops scanning after 10 seconds.
     private static final long CONNECTION_TIME = 10000; // 10 seconds
+
+    // Nordic UART Service UUIDs
+    private static final UUID UART_SERVICE_UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E");
+    private static final UUID UART_TX_CHARACTERISTIC_UUID = UUID.fromString("6E400003-B5A3-F393-E0A9-E50E24DCCA9E");
+    private static final UUID CLIENT_CHARACTERISTIC_CONFIG = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
 
     private final ScanCallback leScanCallback;
     private final Runnable stopScanRunnable;
@@ -84,6 +97,14 @@ public class BluetoothViewModel extends AndroidViewModel {
 
     public LiveData<Boolean> getIsConnected() {
         return isConnected;
+    }
+
+    public LiveData<ImuData> getUpperBackData() {
+        return upperBackData;
+    }
+
+    public LiveData<ImuData> getLowerBackData() {
+        return lowerBackData;
     }
 
     public void startScan() {
@@ -177,6 +198,54 @@ public class BluetoothViewModel extends AndroidViewModel {
                     currentDeviceIndex = (currentDeviceIndex + 1) % deviceNames.length;
                     handler.postDelayed(() -> scanForNextDevice(), 1000); // 1-second delay before scanning for the next device
                 }
+            }
+        }
+
+        @Override
+        public void onServicesDiscovered(BluetoothGatt gatt, int status) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                BluetoothGattCharacteristic characteristic = gatt.getService(UART_SERVICE_UUID).getCharacteristic(UART_TX_CHARACTERISTIC_UUID);
+                if (characteristic != null) {
+                    gatt.setCharacteristicNotification(characteristic, true);
+                    BluetoothGattDescriptor descriptor = characteristic.getDescriptor(CLIENT_CHARACTERISTIC_CONFIG);
+                    if (descriptor != null) {
+                        descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+                        gatt.writeDescriptor(descriptor);
+                    }
+                }
+            }
+        }
+
+        @Override
+        public void onCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
+            byte[] data = characteristic.getValue();
+            String dataString = new String(data);
+
+            try {
+                String[] parts = dataString.split("\\|");
+                if (parts.length == 3) {
+                    String identifier = parts[0];
+                    String[] accelParts = parts[1].substring(2).split(",");
+                    String[] gyroParts = parts[2].substring(2).split(",");
+
+                    float accelX = Float.parseFloat(accelParts[0]);
+                    float accelY = Float.parseFloat(accelParts[1]);
+                    float accelZ = Float.parseFloat(accelParts[2]);
+
+                    float gyroX = Float.parseFloat(gyroParts[0]);
+                    float gyroY = Float.parseFloat(gyroParts[1]);
+                    float gyroZ = Float.parseFloat(gyroParts[2]);
+
+                    ImuData imuData = new ImuData(accelX, accelY, accelZ, gyroX, gyroY, gyroZ);
+
+                    if (identifier.equals("UB")) {
+                        upperBackData.postValue(imuData);
+                    } else if (identifier.equals("LB")) {
+                        lowerBackData.postValue(imuData);
+                    }
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error parsing IMU data: " + dataString, e);
             }
         }
     };

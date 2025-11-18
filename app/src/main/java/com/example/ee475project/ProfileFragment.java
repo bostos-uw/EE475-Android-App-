@@ -1,19 +1,20 @@
 package com.example.ee475project;
 
 import android.Manifest;
-import android.content.Context;
-import android.content.SharedPreferences;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.TextWatcher;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
@@ -24,17 +25,27 @@ import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProvider;
 
+import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.auth.FirebaseUser;
+import com.google.firebase.database.DatabaseReference;
+import com.google.firebase.database.FirebaseDatabase;
+
 public class ProfileFragment extends Fragment {
+
+    private static final String TAG = "ProfileFragment";
 
     private ActivityResultLauncher<String> requestPermissionLauncher;
     private EditText goalInput;
     private TextView goalTextPreview;
     private Button saveGoalButton;
-    private SharedPreferences sharedPreferences;
+    private Button signOutButton;
     private SharedViewModel sharedViewModel;
     private BluetoothViewModel bluetoothViewModel;
     private TextView upperBackStatusText, lowerBackStatusText;
     private View upperBackStatusIndicator, lowerBackStatusIndicator;
+
+    private FirebaseAuth mAuth;
+    private DatabaseReference mDatabase;
 
     @Override
     public void onCreate(@Nullable Bundle savedInstanceState) {
@@ -42,9 +53,14 @@ public class ProfileFragment extends Fragment {
         requestPermissionLauncher = registerForActivityResult(new ActivityResultContracts.RequestPermission(), isGranted -> {
             // We can handle the permission result here if needed
         });
-        sharedPreferences = requireActivity().getSharedPreferences("user_goals", Context.MODE_PRIVATE);
         sharedViewModel = new ViewModelProvider(requireActivity()).get(SharedViewModel.class);
         bluetoothViewModel = new ViewModelProvider(requireActivity()).get(BluetoothViewModel.class);
+
+        mAuth = FirebaseAuth.getInstance();
+        FirebaseUser currentUser = mAuth.getCurrentUser();
+        if (currentUser != null) {
+            mDatabase = FirebaseDatabase.getInstance().getReference("users").child(currentUser.getUid());
+        }
     }
 
     @Override
@@ -61,14 +77,18 @@ public class ProfileFragment extends Fragment {
         goalInput = view.findViewById(R.id.goal_input);
         goalTextPreview = view.findViewById(R.id.goal_text_preview);
         saveGoalButton = view.findViewById(R.id.save_goal_button);
+        signOutButton = view.findViewById(R.id.sign_out_button);
         upperBackStatusText = view.findViewById(R.id.upper_back_status_text);
         upperBackStatusIndicator = view.findViewById(R.id.upper_back_status_indicator);
         lowerBackStatusText = view.findViewById(R.id.lower_back_status_text);
         lowerBackStatusIndicator = view.findViewById(R.id.lower_back_status_indicator);
 
-        int savedGoal = sharedPreferences.getInt("daily_goal", 60);
-        goalInput.setText(String.valueOf(savedGoal));
-        updateGoalPreview(savedGoal);
+        sharedViewModel.getDailyGoal().observe(getViewLifecycleOwner(), goal -> {
+            if (goal != null) {
+                goalInput.setText(String.valueOf(goal));
+                updateGoalPreview(goal);
+            }
+        });
 
         goalInput.addTextChangedListener(new TextWatcher() {
             @Override
@@ -77,7 +97,11 @@ public class ProfileFragment extends Fragment {
             @Override
             public void onTextChanged(CharSequence s, int start, int before, int count) {
                 if (!s.toString().isEmpty()) {
-                    updateGoalPreview(Integer.parseInt(s.toString()));
+                    try {
+                        updateGoalPreview(Integer.parseInt(s.toString()));
+                    } catch (NumberFormatException e) {
+                        // ignore
+                    }
                 }
             }
 
@@ -86,9 +110,37 @@ public class ProfileFragment extends Fragment {
         });
 
         saveGoalButton.setOnClickListener(v -> {
-            int newGoal = Integer.parseInt(goalInput.getText().toString());
-            sharedPreferences.edit().putInt("daily_goal", newGoal).apply();
-            sharedViewModel.setDailyGoal(newGoal);
+            if (mDatabase != null) {
+                try {
+                    int newGoal = Integer.parseInt(goalInput.getText().toString());
+                    mDatabase.child("dailyGoal").setValue(newGoal)
+                            .addOnSuccessListener(aVoid -> {
+                                if (isAdded()) {
+                                    Toast.makeText(getContext(), "Goal saved!", Toast.LENGTH_SHORT).show();
+                                }
+                            })
+                            .addOnFailureListener(e -> {
+                                Log.e(TAG, "Failed to save goal.", e);
+                                if (isAdded()) {
+                                    Toast.makeText(getContext(), "Failed to save goal: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                                }
+                            });
+                } catch (NumberFormatException e) {
+                    Log.e(TAG, "Invalid goal input", e);
+                    if (isAdded()) {
+                        Toast.makeText(getContext(), "Invalid goal format.", Toast.LENGTH_SHORT).show();
+                    }
+                }
+            }
+        });
+
+        signOutButton.setOnClickListener(v -> {
+            FirebaseAuth.getInstance().signOut();
+            Intent intent = new Intent(getActivity(), LoginActivity.class);
+            startActivity(intent);
+            if (getActivity() != null) {
+                getActivity().finish();
+            }
         });
 
         SwitchCompat notificationSwitch = view.findViewById(R.id.notification_switch);
