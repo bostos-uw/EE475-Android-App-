@@ -21,12 +21,14 @@ import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProvider;
 
+import java.util.Locale;
+
 public class HomeFragment extends Fragment {
 
     private TextView dailyGoalMinutes;
     private Button connectButton;
-    private Button connectCycleButton;
     private TextView connectionStatusText;
+    private TextView activeTimeValue;
     private BluetoothViewModel bluetoothViewModel;
     private SharedViewModel sharedViewModel;
 
@@ -48,7 +50,7 @@ public class HomeFragment extends Fragment {
             new ActivityResultContracts.StartActivityForResult(),
             result -> {
                 if (result.getResultCode() == Activity.RESULT_OK) {
-                    bluetoothViewModel.startScan();
+                    bluetoothViewModel.startCycle();
                 } else {
                     // Handle Bluetooth not enabled
                 }
@@ -67,8 +69,8 @@ public class HomeFragment extends Fragment {
 
         dailyGoalMinutes = view.findViewById(R.id.daily_goal_minutes);
         connectButton = view.findViewById(R.id.connect_button);
-        connectCycleButton = view.findViewById(R.id.connect_cycle_button);
         connectionStatusText = view.findViewById(R.id.connection_status_text);
+        activeTimeValue = view.findViewById(R.id.active_time_value);
 
         // Use SharedViewModel to observe goal changes
         sharedViewModel = new ViewModelProvider(requireActivity()).get(SharedViewModel.class);
@@ -84,9 +86,10 @@ public class HomeFragment extends Fragment {
         updateButtonState(bluetoothViewModel.getConnectionStatus().getValue());
 
         bluetoothViewModel.getConnectionStatus().observe(getViewLifecycleOwner(), this::updateButtonState);
-
-        connectCycleButton.setOnClickListener(v -> {
-            bluetoothViewModel.startCycle();
+        bluetoothViewModel.getActiveTime().observe(getViewLifecycleOwner(), time -> {
+            if (time != null) {
+                activeTimeValue.setText(String.format(Locale.US, "%.1f min", time));
+            }
         });
     }
 
@@ -99,25 +102,15 @@ public class HomeFragment extends Fragment {
         if (status.startsWith("Scanning for") || status.equals("Scanning...")) {
             connectButton.setText("Cancel");
             connectButton.setOnClickListener(v -> bluetoothViewModel.cancelScan());
-            connectCycleButton.setText("Stop Cycling");
-            connectCycleButton.setOnClickListener(v -> bluetoothViewModel.disconnect());
         } else if (status.startsWith("Connecting to")) {
             connectButton.setText("Cancel");
             connectButton.setOnClickListener(v -> bluetoothViewModel.disconnect());
-            connectCycleButton.setText("Stop Cycling");
-            connectCycleButton.setOnClickListener(v -> bluetoothViewModel.disconnect());
         } else if (status.startsWith("Connected to")) {
             connectButton.setText("Disconnect");
             connectButton.setOnClickListener(v -> bluetoothViewModel.disconnect());
-            connectCycleButton.setText("Stop Cycling");
-            connectCycleButton.setOnClickListener(v -> bluetoothViewModel.disconnect());
         } else { // Primarily "Disconnected"
             connectButton.setText("Connect");
             connectButton.setOnClickListener(v -> requestBluetoothPermissions());
-            connectCycleButton.setText("Connect (Cycle)");
-            connectCycleButton.setOnClickListener(v -> {
-                bluetoothViewModel.startCycle();
-            });
         }
     }
 
@@ -162,7 +155,7 @@ public class HomeFragment extends Fragment {
             Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
             enableBluetoothLauncher.launch(enableBtIntent);
         } else {
-            bluetoothViewModel.startScan();
+            bluetoothViewModel.startCycle();
         }
     }
 }

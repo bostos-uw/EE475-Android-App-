@@ -10,6 +10,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
+import androidx.lifecycle.ViewModelProvider;
 
 import com.example.ee475project.databinding.FragmentAnalyticsBinding;
 import com.github.mikephil.charting.components.XAxis;
@@ -24,11 +25,13 @@ import com.github.mikephil.charting.formatter.IndexAxisValueFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Random;
 
 public class AnalyticsFragment extends Fragment {
 
     private FragmentAnalyticsBinding binding;
+    private BluetoothViewModel bluetoothViewModel;
 
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container,
@@ -40,6 +43,13 @@ public class AnalyticsFragment extends Fragment {
     @Override
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
+
+        bluetoothViewModel = new ViewModelProvider(requireActivity()).get(BluetoothViewModel.class);
+        bluetoothViewModel.getTotalConnectionTime().observe(getViewLifecycleOwner(), totalTime -> {
+            if (totalTime != null) {
+                binding.tvTotalValue.setText(String.format(Locale.US, "%.2f h", totalTime));
+            }
+        });
 
         setupBarChart();
         setupPieChart();

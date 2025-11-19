@@ -14,6 +14,7 @@ import android.bluetooth.le.ScanFilter;
 import android.bluetooth.le.ScanResult;
 import android.bluetooth.le.ScanSettings;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -24,6 +25,7 @@ import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
 
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.List;
 import java.util.UUID;
 
@@ -37,6 +39,13 @@ public class BluetoothViewModel extends AndroidViewModel {
     private final MutableLiveData<Boolean> isConnected = new MutableLiveData<>(false);
     private final MutableLiveData<ImuData> upperBackData = new MutableLiveData<>();
     private final MutableLiveData<ImuData> lowerBackData = new MutableLiveData<>();
+    private final MutableLiveData<Float> totalConnectionTime = new MutableLiveData<>(0f);
+    private final MutableLiveData<Float> activeTime = new MutableLiveData<>(0f);
+    private long connectionStartTime;
+    private final Handler timerHandler = new Handler(Looper.getMainLooper());
+    private final SharedPreferences sharedPreferences;
+
+
     private BluetoothGatt bluetoothGatt;
 
     private static final String TAG = "BluetoothViewModel";
@@ -58,9 +67,11 @@ public class BluetoothViewModel extends AndroidViewModel {
 
     public BluetoothViewModel(@NonNull Application application) {
         super(application);
+        sharedPreferences = application.getSharedPreferences("posture_prefs", Context.MODE_PRIVATE);
         BluetoothManager bluetoothManager = (BluetoothManager) application.getSystemService(Context.BLUETOOTH_SERVICE);
         bluetoothAdapter = bluetoothManager.getAdapter();
         bluetoothLeScanner = bluetoothAdapter.getBluetoothLeScanner();
+        loadPersistentData();
 
         leScanCallback = new ScanCallback() {
             @Override
@@ -84,11 +95,30 @@ public class BluetoothViewModel extends AndroidViewModel {
         stopScanRunnable = () -> {
             if (bluetoothLeScanner != null) {
                 bluetoothLeScanner.stopScan(leScanCallback);
-                if (connectionStatus.getValue() != null && connectionStatus.getValue().equals("Scanning...")) {
+                if (connectionStatus.getValue() != null && connectionStatus.getValue().startsWith("Scanning")) {
                     connectionStatus.setValue("Disconnected");
                 }
             }
         };
+    }
+
+    private void loadPersistentData() {
+        totalConnectionTime.setValue(sharedPreferences.getFloat("total_connection_time", 0f));
+
+        long lastReset = sharedPreferences.getLong("last_active_time_reset", 0);
+        Calendar cal = Calendar.getInstance();
+        cal.set(Calendar.HOUR_OF_DAY, 0);
+        cal.set(Calendar.MINUTE, 0);
+        cal.set(Calendar.SECOND, 0);
+        cal.set(Calendar.MILLISECOND, 0);
+        long today = cal.getTimeInMillis();
+
+        if (lastReset < today) {
+            activeTime.setValue(0f);
+            sharedPreferences.edit().putLong("last_active_time_reset", today).apply();
+        } else {
+            activeTime.setValue(sharedPreferences.getFloat("active_time", 0f));
+        }
     }
 
     public LiveData<String> getConnectionStatus() {
@@ -105,6 +135,14 @@ public class BluetoothViewModel extends AndroidViewModel {
 
     public LiveData<ImuData> getLowerBackData() {
         return lowerBackData;
+    }
+
+    public LiveData<Float> getTotalConnectionTime() {
+        return totalConnectionTime;
+    }
+
+    public LiveData<Float> getActiveTime() {
+        return activeTime;
     }
 
     public void startScan() {
@@ -172,6 +210,30 @@ public class BluetoothViewModel extends AndroidViewModel {
         }
     }
 
+    private final Runnable timerRunnable = new Runnable() {
+        @Override
+        public void run() {
+            long millis = System.currentTimeMillis() - connectionStartTime;
+            float hours = millis / (1000f * 60 * 60);
+            float minutes = millis / (1000f * 60);
+
+            Float currentTotal = totalConnectionTime.getValue();
+            if (currentTotal == null) currentTotal = 0f;
+            totalConnectionTime.postValue(currentTotal + hours);
+
+            Float currentActive = activeTime.getValue();
+            if (currentActive == null) currentActive = 0f;
+            activeTime.postValue(currentActive + minutes);
+
+            sharedPreferences.edit().putFloat("total_connection_time", totalConnectionTime.getValue()).apply();
+            sharedPreferences.edit().putFloat("active_time", activeTime.getValue()).apply();
+
+            connectionStartTime = System.currentTimeMillis(); // Reset start time for next interval
+            timerHandler.postDelayed(this, 1000); // Update every second
+        }
+    };
+
+
     private final BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
         @Override
         public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
@@ -179,6 +241,9 @@ public class BluetoothViewModel extends AndroidViewModel {
             if (newState == BluetoothGatt.STATE_CONNECTED) {
                 connectionStatus.postValue("Connected to " + deviceName);
                 isConnected.postValue(true);
+                connectionStartTime = System.currentTimeMillis();
+                timerHandler.post(timerRunnable);
+
                 bluetoothGatt = gatt;
                 gatt.discoverServices();
 
@@ -187,6 +252,7 @@ public class BluetoothViewModel extends AndroidViewModel {
                 }
 
             } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
+                timerHandler.removeCallbacks(timerRunnable);
                 connectionStatus.postValue("Disconnected from " + deviceName);
                 isConnected.postValue(false);
                 gatt.close();
