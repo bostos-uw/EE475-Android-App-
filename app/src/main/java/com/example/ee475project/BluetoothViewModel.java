@@ -1,5 +1,6 @@
 package com.example.ee475project;
 
+import android.annotation.SuppressLint;
 import android.app.Application;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
@@ -14,7 +15,6 @@ import android.bluetooth.le.ScanFilter;
 import android.bluetooth.le.ScanResult;
 import android.bluetooth.le.ScanSettings;
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -24,11 +24,24 @@ import androidx.lifecycle.AndroidViewModel;
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
 
+import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.auth.FirebaseUser;
+import com.google.firebase.database.DataSnapshot;
+import com.google.firebase.database.DatabaseError;
+import com.google.firebase.database.DatabaseReference;
+import com.google.firebase.database.FirebaseDatabase;
+import com.google.firebase.database.ValueEventListener;
+
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.List;
 import java.util.UUID;
 
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
+
+@SuppressLint("MissingPermission")
 public class BluetoothViewModel extends AndroidViewModel {
 
     private final BluetoothAdapter bluetoothAdapter;
@@ -43,8 +56,9 @@ public class BluetoothViewModel extends AndroidViewModel {
     private final MutableLiveData<Float> activeTime = new MutableLiveData<>(0f);
     private long connectionStartTime;
     private final Handler timerHandler = new Handler(Looper.getMainLooper());
-    private final SharedPreferences sharedPreferences;
 
+    private final DatabaseReference userDbRef;
+    private final StringBuilder dataBuffer = new StringBuilder();
 
     private BluetoothGatt bluetoothGatt;
 
@@ -65,13 +79,34 @@ public class BluetoothViewModel extends AndroidViewModel {
     private int currentDeviceIndex = 0;
     private final String[] deviceNames = {DEVICE_NAME_UPPER, DEVICE_NAME_LOWER};
 
+    // IMU Data
+    private float tempAccelX, tempAccelY, tempAccelZ;
+    private float tempGyroX, tempGyroY, tempGyroZ;
+    private boolean hasAccelData = false;
+    private boolean hasGyroData = false;
+    private String currentSensor = "";  // "UB" or "LB"
+
+    // Firebase Session Tracking
+    private String currentSessionId = null;
+    private long sessionStartTime = 0;
+    private DatabaseReference sessionsRef;
+
     public BluetoothViewModel(@NonNull Application application) {
         super(application);
-        sharedPreferences = application.getSharedPreferences("posture_prefs", Context.MODE_PRIVATE);
         BluetoothManager bluetoothManager = (BluetoothManager) application.getSystemService(Context.BLUETOOTH_SERVICE);
         bluetoothAdapter = bluetoothManager.getAdapter();
         bluetoothLeScanner = bluetoothAdapter.getBluetoothLeScanner();
-        loadPersistentData();
+
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        if (user != null) {
+            userDbRef = FirebaseDatabase.getInstance().getReference("users").child(user.getUid());
+            loadPersistentData();
+            sessionsRef = FirebaseDatabase.getInstance()
+                    .getReference("posture_sessions")
+                    .child(user.getUid());
+        } else {
+            userDbRef = null;
+        }
 
         leScanCallback = new ScanCallback() {
             @Override
@@ -100,25 +135,45 @@ public class BluetoothViewModel extends AndroidViewModel {
                 }
             }
         };
+
+
     }
 
     private void loadPersistentData() {
-        totalConnectionTime.setValue(sharedPreferences.getFloat("total_connection_time", 0f));
+        if (userDbRef == null) return;
 
-        long lastReset = sharedPreferences.getLong("last_active_time_reset", 0);
-        Calendar cal = Calendar.getInstance();
-        cal.set(Calendar.HOUR_OF_DAY, 0);
-        cal.set(Calendar.MINUTE, 0);
-        cal.set(Calendar.SECOND, 0);
-        cal.set(Calendar.MILLISECOND, 0);
-        long today = cal.getTimeInMillis();
+        userDbRef.addListenerForSingleValueEvent(new ValueEventListener() {
+            @Override
+            public void onDataChange(@NonNull DataSnapshot snapshot) {
+                if (snapshot.exists()) {
+                    Float totalTime = snapshot.child("total_connection_time").getValue(Float.class);
+                    totalConnectionTime.setValue(totalTime != null ? totalTime : 0f);
 
-        if (lastReset < today) {
-            activeTime.setValue(0f);
-            sharedPreferences.edit().putLong("last_active_time_reset", today).apply();
-        } else {
-            activeTime.setValue(sharedPreferences.getFloat("active_time", 0f));
-        }
+                    Long lastReset = snapshot.child("last_active_time_reset").getValue(Long.class);
+                    if (lastReset == null) lastReset = 0L;
+
+                    Calendar cal = Calendar.getInstance();
+                    cal.set(Calendar.HOUR_OF_DAY, 0);
+                    cal.set(Calendar.MINUTE, 0);
+                    cal.set(Calendar.SECOND, 0);
+                    cal.set(Calendar.MILLISECOND, 0);
+                    long today = cal.getTimeInMillis();
+
+                    if (lastReset < today) {
+                        activeTime.setValue(0f);
+                        userDbRef.child("last_active_time_reset").setValue(today);
+                    } else {
+                        Float actTime = snapshot.child("active_time").getValue(Float.class);
+                        activeTime.setValue(actTime != null ? actTime : 0f);
+                    }
+                }
+            }
+
+            @Override
+            public void onCancelled(@NonNull DatabaseError error) {
+                Log.e(TAG, "Failed to load user data.", error.toException());
+            }
+        });
     }
 
     public LiveData<String> getConnectionStatus() {
@@ -213,6 +268,7 @@ public class BluetoothViewModel extends AndroidViewModel {
     private final Runnable timerRunnable = new Runnable() {
         @Override
         public void run() {
+            if (userDbRef == null) return;
             long millis = System.currentTimeMillis() - connectionStartTime;
             float hours = millis / (1000f * 60 * 60);
             float minutes = millis / (1000f * 60);
@@ -225,8 +281,8 @@ public class BluetoothViewModel extends AndroidViewModel {
             if (currentActive == null) currentActive = 0f;
             activeTime.postValue(currentActive + minutes);
 
-            sharedPreferences.edit().putFloat("total_connection_time", totalConnectionTime.getValue()).apply();
-            sharedPreferences.edit().putFloat("active_time", activeTime.getValue()).apply();
+            userDbRef.child("total_connection_time").setValue(totalConnectionTime.getValue());
+            userDbRef.child("active_time").setValue(activeTime.getValue());
 
             connectionStartTime = System.currentTimeMillis(); // Reset start time for next interval
             timerHandler.postDelayed(this, 1000); // Update every second
@@ -238,7 +294,28 @@ public class BluetoothViewModel extends AndroidViewModel {
         @Override
         public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
             String deviceName = gatt.getDevice().getName();
+
             if (newState == BluetoothGatt.STATE_CONNECTED) {
+                // ALWAYS create a new session if one doesn't exist
+                if (currentSessionId == null && sessionsRef != null) {
+                    currentSessionId = generateSessionId();
+                    sessionStartTime = System.currentTimeMillis();
+
+                    // Create session in Firebase with ALL required fields
+                    PostureSession session = new PostureSession(
+                            currentSessionId,
+                            FirebaseAuth.getInstance().getCurrentUser().getUid(),
+                            sessionStartTime
+                    );
+
+                    // Write the entire session object to Firebase
+                    sessionsRef.child(currentSessionId).setValue(session)
+                            .addOnSuccessListener(aVoid ->
+                                    Log.d(TAG, "✓ New session created: " + currentSessionId))
+                            .addOnFailureListener(e ->
+                                    Log.e(TAG, "✗ Failed to create session: " + e.getMessage()));
+                }
+
                 connectionStatus.postValue("Connected to " + deviceName);
                 isConnected.postValue(true);
                 connectionStartTime = System.currentTimeMillis();
@@ -253,16 +330,25 @@ public class BluetoothViewModel extends AndroidViewModel {
 
             } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
                 timerHandler.removeCallbacks(timerRunnable);
+                dataBuffer.setLength(0);
                 connectionStatus.postValue("Disconnected from " + deviceName);
                 isConnected.postValue(false);
                 gatt.close();
+
                 if (bluetoothGatt == gatt) {
                     bluetoothGatt = null;
                 }
 
                 if (isCycling) {
                     currentDeviceIndex = (currentDeviceIndex + 1) % deviceNames.length;
-                    handler.postDelayed(() -> scanForNextDevice(), 1000); // 1-second delay before scanning for the next device
+
+                    // After completing a full cycle (both devices), end the session
+                    if (currentDeviceIndex == 0) {
+                        Log.d(TAG, "✓ Session cycle complete: " + currentSessionId);
+                        currentSessionId = null;  // Next connection will create new session
+                    }
+
+                    handler.postDelayed(() -> scanForNextDevice(), 1000);
                 }
             }
         }
@@ -285,34 +371,118 @@ public class BluetoothViewModel extends AndroidViewModel {
         @Override
         public void onCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
             byte[] data = characteristic.getValue();
-            String dataString = new String(data);
+            String dataChunk = new String(data);
+            dataBuffer.append(dataChunk);
 
-            try {
-                String[] parts = dataString.split("\\|");
-                if (parts.length == 3) {
-                    String identifier = parts[0];
-                    String[] accelParts = parts[1].substring(2).split(",");
-                    String[] gyroParts = parts[2].substring(2).split(",");
+            String bufferContent = dataBuffer.toString();
+            if (bufferContent.contains("\r") || bufferContent.contains("\n")) {
+                bufferContent = bufferContent.replace("\r\n", "\n").replace("\r", "\n");
+                dataBuffer.setLength(0);
+                dataBuffer.append(bufferContent);
 
-                    float accelX = Float.parseFloat(accelParts[0]);
-                    float accelY = Float.parseFloat(accelParts[1]);
-                    float accelZ = Float.parseFloat(accelParts[2]);
+                int newlineIndex;
+                while ((newlineIndex = dataBuffer.indexOf("\n")) != -1) {
+                    final String dataString = dataBuffer.substring(0, newlineIndex).trim();
+                    dataBuffer.delete(0, newlineIndex + 1);
 
-                    float gyroX = Float.parseFloat(gyroParts[0]);
-                    float gyroY = Float.parseFloat(gyroParts[1]);
-                    float gyroZ = Float.parseFloat(gyroParts[2]);
-
-                    ImuData imuData = new ImuData(accelX, accelY, accelZ, gyroX, gyroY, gyroZ);
-
-                    if (identifier.equals("UB")) {
-                        upperBackData.postValue(imuData);
-                    } else if (identifier.equals("LB")) {
-                        lowerBackData.postValue(imuData);
+                    if (dataString.isEmpty()) {
+                        continue;
                     }
+
+                    parseSplitMessage(dataString);
                 }
-            } catch (Exception e) {
-                Log.e(TAG, "Error parsing IMU data: " + dataString, e);
             }
         }
-    };
-}
+    };  // END of gattCallback
+
+    private String generateSessionId() {
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US);
+        return "session_" + sdf.format(new Date());
+    }
+
+    private void parseSplitMessage(String dataString) {
+        try {
+            String[] parts = dataString.split("\\|");
+
+            if (parts.length != 2) {
+                Log.w(TAG, "Malformed data packet (expected 2 parts): " + dataString);
+                return;
+            }
+
+            String identifier = parts[0];
+            String dataType = parts[1].substring(0, 1);
+            String[] values = parts[1].substring(2).split(",");
+
+            if (values.length != 3) {
+                Log.w(TAG, "Malformed data values (expected 3 values): " + dataString);
+                return;
+            }
+
+            float x = Float.parseFloat(values[0]);
+            float y = Float.parseFloat(values[1]);
+            float z = Float.parseFloat(values[2]);
+
+            if (dataType.equals("A")) {
+                tempAccelX = x;
+                tempAccelY = y;
+                tempAccelZ = z;
+                hasAccelData = true;
+                currentSensor = identifier;
+
+                Log.d(TAG, identifier + " - Accel received: " + x + "," + y + "," + z);
+            }
+            else if (dataType.equals("G")) {
+                tempGyroX = x;
+                tempGyroY = y;
+                tempGyroZ = z;
+                hasGyroData = true;
+
+                Log.d(TAG, identifier + " - Gyro received: " + x + "," + y + "," + z);
+
+                if (hasAccelData && hasGyroData && currentSensor.equals(identifier)) {
+                    ImuData imuData = new ImuData(
+                            tempAccelX, tempAccelY, tempAccelZ,
+                            tempGyroX, tempGyroY, tempGyroZ
+                    );
+
+                    if (currentSessionId != null) {
+                        SensorData sensorData = new SensorData(
+                                tempAccelX, tempAccelY, tempAccelZ,
+                                tempGyroX, tempGyroY, tempGyroZ,
+                                System.currentTimeMillis()
+                        );
+
+                        if (identifier.equals("UB")) {
+                            sessionsRef.child(currentSessionId)
+                                    .child("upperBack")
+                                    .setValue(sensorData);
+
+                            upperBackData.postValue(imuData);  // ADD THIS - was missing
+                            Log.d(TAG, "Upper back data saved to session: " + currentSessionId);
+
+                        } else if (identifier.equals("LB")) {
+                            sessionsRef.child(currentSessionId)
+                                    .child("lowerBack")
+                                    .setValue(sensorData);
+
+                            lowerBackData.postValue(imuData);
+                            Log.d(TAG, "Lower back data saved to session: " + currentSessionId);
+                        }
+                    }
+
+                    // Reset flags for next pair
+                    hasAccelData = false;
+                    hasGyroData = false;
+                    currentSensor = "";
+                }
+            } else {
+                Log.w(TAG, "Unknown data type: " + dataType);
+            }
+
+        } catch (NumberFormatException e) {
+            Log.e(TAG, "Error parsing float values from: " + dataString, e);
+        } catch (Exception e) {
+            Log.e(TAG, "Error parsing split message: " + dataString, e);
+        }
+    }
+}  // END of BluetoothViewModel class
