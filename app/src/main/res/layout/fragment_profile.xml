@@ -117,6 +117,49 @@
                 android:text="Save Goal" />
         </LinearLayout>
 
+        <!-- Calibration Card -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/card_background"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:drawableStart="@drawable/ic_baseline_track_changes_24"
+                android:drawablePadding="8dp"
+                android:text="Posture Calibration"
+                android:textColor="@android:color/black"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Personalize slouch detection" />
+
+            <TextView
+                android:id="@+id/calibration_status_text"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Not calibrated"
+                android:textColor="@color/ios_red"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/start_calibration_button"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Start Calibration" />
+
+        </LinearLayout>
+
         <!-- Notifications Card -->
         <LinearLayout
             android:layout_width="match_parent"

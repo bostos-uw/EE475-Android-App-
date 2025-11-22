@@ -50,6 +50,7 @@ public class BluetoothViewModel extends AndroidViewModel {
 
     private final MutableLiveData<String> connectionStatus = new MutableLiveData<>("Disconnected");
     private final MutableLiveData<Boolean> isConnected = new MutableLiveData<>(false);
+    private final MutableLiveData<Boolean> isCycleComplete = new MutableLiveData<>(false);
     private final MutableLiveData<ImuData> upperBackData = new MutableLiveData<>();
     private final MutableLiveData<ImuData> lowerBackData = new MutableLiveData<>();
     private final MutableLiveData<Float> totalConnectionTime = new MutableLiveData<>(0f);
@@ -184,6 +185,10 @@ public class BluetoothViewModel extends AndroidViewModel {
         return isConnected;
     }
 
+    public LiveData<Boolean> getIsCycleComplete() {
+        return isCycleComplete;
+    }
+
     public LiveData<ImuData> getUpperBackData() {
         return upperBackData;
     }
@@ -222,6 +227,7 @@ public class BluetoothViewModel extends AndroidViewModel {
     public void startCycle() {
         isCycling = true;
         currentDeviceIndex = 0;
+        isCycleComplete.setValue(false);
         scanForNextDevice();
     }
 
@@ -245,6 +251,7 @@ public class BluetoothViewModel extends AndroidViewModel {
 
     public void cancelScan() {
         isCycling = false;
+        isCycleComplete.setValue(false);
         if (bluetoothLeScanner != null) {
             handler.removeCallbacks(stopScanRunnable);
             stopScanRunnable.run();
@@ -346,6 +353,12 @@ public class BluetoothViewModel extends AndroidViewModel {
                     if (currentDeviceIndex == 0) {
                         Log.d(TAG, "✓ Session cycle complete: " + currentSessionId);
                         currentSessionId = null;  // Next connection will create new session
+
+                        // Notify that cycle is complete
+                        isCycleComplete.postValue(true);
+                        // Reset the flag after a short delay
+//                        handler.postDelayed(() -> isCycleComplete.postValue(false), 100);
+
                     }
 
                     handler.postDelayed(() -> scanForNextDevice(), 1000);
