@@ -32,14 +32,12 @@ import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
 import com.google.firebase.database.ValueEventListener;
 
-import java.util.ArrayList;
-import java.util.Calendar;
-import java.util.List;
-import java.util.UUID;
-
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 @SuppressLint("MissingPermission")
 public class BluetoothViewModel extends AndroidViewModel {
@@ -101,7 +99,7 @@ public class BluetoothViewModel extends AndroidViewModel {
         FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
         if (user != null) {
             userDbRef = FirebaseDatabase.getInstance().getReference("users").child(user.getUid());
-            loadPersistentData();
+            performInitialLoadAndDailyCheck(); // Perform the check on initialization
             sessionsRef = FirebaseDatabase.getInstance()
                     .getReference("posture_sessions")
                     .child(user.getUid());
@@ -136,37 +134,42 @@ public class BluetoothViewModel extends AndroidViewModel {
                 }
             }
         };
-
-
     }
 
-    private void loadPersistentData() {
+    // This method is now public to be callable from the HomeFragment
+    public void performInitialLoadAndDailyCheck() {
         if (userDbRef == null) return;
 
         userDbRef.addListenerForSingleValueEvent(new ValueEventListener() {
             @Override
             public void onDataChange(@NonNull DataSnapshot snapshot) {
+                String todayKey = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
+
                 if (snapshot.exists()) {
                     Float totalTime = snapshot.child("total_connection_time").getValue(Float.class);
                     totalConnectionTime.setValue(totalTime != null ? totalTime : 0f);
 
-                    Long lastReset = snapshot.child("last_active_time_reset").getValue(Long.class);
-                    if (lastReset == null) lastReset = 0L;
+                    String lastActiveDate = snapshot.child("last_active_date").getValue(String.class);
 
-                    Calendar cal = Calendar.getInstance();
-                    cal.set(Calendar.HOUR_OF_DAY, 0);
-                    cal.set(Calendar.MINUTE, 0);
-                    cal.set(Calendar.SECOND, 0);
-                    cal.set(Calendar.MILLISECOND, 0);
-                    long today = cal.getTimeInMillis();
-
-                    if (lastReset < today) {
-                        activeTime.setValue(0f);
-                        userDbRef.child("last_active_time_reset").setValue(today);
+                    if (!todayKey.equals(lastActiveDate)) {
+                        // New day detected, reset all daily values in Firebase and LiveData
+                        Log.d(TAG, "New day detected. Resetting daily stats in Firebase.");
+                        activeTime.postValue(0f); // Update LiveData
+                        userDbRef.child("active_time").setValue(0f);
+                        userDbRef.child("slouch_time").setValue(0f);
+                        userDbRef.child("last_active_date").setValue(todayKey);
                     } else {
+                        // Same day, load the existing active time
                         Float actTime = snapshot.child("active_time").getValue(Float.class);
                         activeTime.setValue(actTime != null ? actTime : 0f);
                     }
+                } else {
+                    // First time user, initialize the date and other fields
+                    Log.d(TAG, "First time user setup in Firebase.");
+                    userDbRef.child("last_active_date").setValue(todayKey);
+                    userDbRef.child("active_time").setValue(0f);
+                    userDbRef.child("slouch_time").setValue(0f);
+                    userDbRef.child("total_connection_time").setValue(0f);
                 }
             }
 
@@ -277,19 +280,22 @@ public class BluetoothViewModel extends AndroidViewModel {
         public void run() {
             if (userDbRef == null) return;
             long millis = System.currentTimeMillis() - connectionStartTime;
-            float hours = millis / (1000f * 60 * 60);
             float minutes = millis / (1000f * 60);
 
-            Float currentTotal = totalConnectionTime.getValue();
-            if (currentTotal == null) currentTotal = 0f;
-            totalConnectionTime.postValue(currentTotal + hours);
-
+            // Use a local variable for calculation to avoid race conditions with LiveData
             Float currentActive = activeTime.getValue();
             if (currentActive == null) currentActive = 0f;
-            activeTime.postValue(currentActive + minutes);
+            float newActiveTime = currentActive + minutes;
 
-            userDbRef.child("total_connection_time").setValue(totalConnectionTime.getValue());
-            userDbRef.child("active_time").setValue(activeTime.getValue());
+            activeTime.postValue(newActiveTime);
+            userDbRef.child("active_time").setValue(newActiveTime);
+
+            // Also update total connection time
+            Float currentTotal = totalConnectionTime.getValue();
+            if (currentTotal == null) currentTotal = 0f;
+            float newTotalTime = currentTotal + (minutes / 60); // minutes to hours
+            totalConnectionTime.postValue(newTotalTime);
+            userDbRef.child("total_connection_time").setValue(newTotalTime);
 
             connectionStartTime = System.currentTimeMillis(); // Reset start time for next interval
             timerHandler.postDelayed(this, 1000); // Update every second
@@ -303,19 +309,15 @@ public class BluetoothViewModel extends AndroidViewModel {
             String deviceName = gatt.getDevice().getName();
 
             if (newState == BluetoothGatt.STATE_CONNECTED) {
-                // ALWAYS create a new session if one doesn't exist
                 if (currentSessionId == null && sessionsRef != null) {
                     currentSessionId = generateSessionId();
                     sessionStartTime = System.currentTimeMillis();
 
-                    // Create session in Firebase with ALL required fields
                     PostureSession session = new PostureSession(
                             currentSessionId,
                             FirebaseAuth.getInstance().getCurrentUser().getUid(),
                             sessionStartTime
                     );
-
-                    // Write the entire session object to Firebase
                     sessionsRef.child(currentSessionId).setValue(session)
                             .addOnSuccessListener(aVoid ->
                                     Log.d(TAG, "✓ New session created: " + currentSessionId))
@@ -349,16 +351,10 @@ public class BluetoothViewModel extends AndroidViewModel {
                 if (isCycling) {
                     currentDeviceIndex = (currentDeviceIndex + 1) % deviceNames.length;
 
-                    // After completing a full cycle (both devices), end the session
                     if (currentDeviceIndex == 0) {
                         Log.d(TAG, "✓ Session cycle complete: " + currentSessionId);
-                        currentSessionId = null;  // Next connection will create new session
-
-                        // Notify that cycle is complete
+                        currentSessionId = null;
                         isCycleComplete.postValue(true);
-                        // Reset the flag after a short delay
-//                        handler.postDelayed(() -> isCycleComplete.postValue(false), 100);
-
                     }
 
                     handler.postDelayed(() -> scanForNextDevice(), 1000);
@@ -442,15 +438,11 @@ public class BluetoothViewModel extends AndroidViewModel {
                 hasAccelData = true;
                 currentSensor = identifier;
 
-                Log.d(TAG, identifier + " - Accel received: " + x + "," + y + "," + z);
-            }
-            else if (dataType.equals("G")) {
+            } else if (dataType.equals("G")) {
                 tempGyroX = x;
                 tempGyroY = y;
                 tempGyroZ = z;
                 hasGyroData = true;
-
-                Log.d(TAG, identifier + " - Gyro received: " + x + "," + y + "," + z);
 
                 if (hasAccelData && hasGyroData && currentSensor.equals(identifier)) {
                     ImuData imuData = new ImuData(
@@ -465,37 +457,24 @@ public class BluetoothViewModel extends AndroidViewModel {
                                 System.currentTimeMillis()
                         );
 
+                        DatabaseReference sensorRef = sessionsRef.child(currentSessionId);
                         if (identifier.equals("UB")) {
-                            sessionsRef.child(currentSessionId)
-                                    .child("upperBack")
-                                    .setValue(sensorData);
-
-                            upperBackData.postValue(imuData);  // ADD THIS - was missing
-                            Log.d(TAG, "Upper back data saved to session: " + currentSessionId);
-
+                            sensorRef.child("upperBack").setValue(sensorData);
+                            upperBackData.postValue(imuData);
                         } else if (identifier.equals("LB")) {
-                            sessionsRef.child(currentSessionId)
-                                    .child("lowerBack")
-                                    .setValue(sensorData);
-
+                            sensorRef.child("lowerBack").setValue(sensorData);
                             lowerBackData.postValue(imuData);
-                            Log.d(TAG, "Lower back data saved to session: " + currentSessionId);
                         }
                     }
-
-                    // Reset flags for next pair
                     hasAccelData = false;
                     hasGyroData = false;
                     currentSensor = "";
                 }
-            } else {
-                Log.w(TAG, "Unknown data type: " + dataType);
             }
-
         } catch (NumberFormatException e) {
             Log.e(TAG, "Error parsing float values from: " + dataString, e);
         } catch (Exception e) {
             Log.e(TAG, "Error parsing split message: " + dataString, e);
         }
     }
-}  // END of BluetoothViewModel class
+}

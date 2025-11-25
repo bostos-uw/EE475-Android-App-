@@ -96,9 +96,10 @@
                         android:textSize="12sp" />
 
                     <TextView
+                        android:id="@+id/tv_daily_avg_value"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="@string/daily_avg_value"
+                        android:text="0.0 min"
                         android:textColor="@color/ios_blue"
                         android:textSize="18sp"
                         android:textStyle="bold" />
@@ -181,14 +182,16 @@
                         android:textSize="12sp" />
 
                     <TextView
+                        android:id="@+id/tv_best_day_value"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="@string/best_day_value"
+                        android:text="0.0 min"
                         android:textColor="@color/ios_green"
                         android:textSize="18sp"
                         android:textStyle="bold" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
+
 
         </LinearLayout>
 
@@ -332,12 +335,14 @@
                             android:textSize="14sp" />
 
                         <TextView
+                            android:id="@+id/tv_upright_value"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="@string/upright_value"
                             android:textColor="@color/ios_blue"
                             android:textSize="20sp"
                             android:textStyle="bold" />
+
                     </LinearLayout>
                 </com.google.android.material.card.MaterialCardView>
 
@@ -369,12 +374,15 @@
                             android:textSize="14sp" />
 
                         <TextView
+                            android:id="@+id/tv_slouch_value"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="@string/slouch_value"
                             android:textColor="@color/ios_orange"
                             android:textSize="20sp"
                             android:textStyle="bold" />
+
+
                     </LinearLayout>
                 </com.google.android.material.card.MaterialCardView>
 

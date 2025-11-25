@@ -334,7 +334,7 @@ public class CalibrationHelper {
 
         // Stop any ongoing BLE operations
         bluetoothViewModel.cancelScan();
-        bluetoothViewModel.disconnect();  // Disconnect any active connections
+        bluetoothViewModel.disconnect();
 
         if (upperBackDataList.isEmpty() || lowerBackDataList.isEmpty()) {
             // Show specific error message
@@ -345,7 +345,6 @@ public class CalibrationHelper {
                             "Lower back samples: " + lowerBackDataList.size() + "\n\n" +
                             "Would you like to retry?")
                     .setPositiveButton("Retry", (dialog, which) -> {
-                        // Reset state and retry
                         upperBackDataList.clear();
                         lowerBackDataList.clear();
                         collectUprightData();
@@ -379,23 +378,30 @@ public class CalibrationHelper {
                 System.currentTimeMillis()
         );
 
-        calibrationData.upperBackUpright = SensorAngles.fromSensorData(upperBack);
-        calibrationData.lowerBackUpright = SensorAngles.fromSensorData(lowerBack);
+        // Convert to angles
+        SensorAngles upperAngles = SensorAngles.fromSensorData(upperBack);
+        SensorAngles lowerAngles = SensorAngles.fromSensorData(lowerBack);
+
+        // NEW APPROACH: Store the angles themselves (we'll use them to calculate difference)
+        calibrationData.upperBackUpright = upperAngles;
+        calibrationData.lowerBackUpright = lowerAngles;
+
+        // Calculate spine curvature (difference between upper and lower)
+        float uprightPitchDiff = upperAngles.pitch - lowerAngles.pitch;
+        float uprightRollDiff = upperAngles.roll - lowerAngles.roll;
 
         Log.d(TAG, "✓ Upright data saved (averaged from " +
                 upperBackDataList.size() + " upper, " +
                 lowerBackDataList.size() + " lower samples):");
-        Log.d(TAG, "  Upper - Roll: " + calibrationData.upperBackUpright.roll +
-                "° Pitch: " + calibrationData.upperBackUpright.pitch + "°");
-        Log.d(TAG, "  Lower - Roll: " + calibrationData.lowerBackUpright.roll +
-                "° Pitch: " + calibrationData.lowerBackUpright.pitch + "°");
+        Log.d(TAG, "  Upper - Roll: " + upperAngles.roll + "° Pitch: " + upperAngles.pitch + "°");
+        Log.d(TAG, "  Lower - Roll: " + lowerAngles.roll + "° Pitch: " + lowerAngles.pitch + "°");
+        Log.d(TAG, "  Spine Curvature - Pitch diff: " + uprightPitchDiff + "° Roll diff: " + uprightRollDiff + "°");
 
         Toast.makeText(context, "✓ Upright posture recorded!\n" +
-                        "Upper: " + upperBackDataList.size() + " samples\n" +
-                        "Lower: " + lowerBackDataList.size() + " samples",
+                        "Spine curvature baseline established",
                 Toast.LENGTH_LONG).show();
 
-        // IMPORTANT: Reset ALL collection flags and data before next step
+        // Reset before next step
         upperBackDataList.clear();
         lowerBackDataList.clear();
         isDeviceConnected = false;
@@ -403,16 +409,17 @@ public class CalibrationHelper {
         // Move to slouch step
         currentStep = CalibrationStep.WAITING_FOR_SLOUCH_POSITION;
 
-        // Show slouch dialog after a longer delay to ensure BLE is fully reset
-        handler.postDelayed(this::showSlouchDialog, 3000);  // Increased to 3 seconds
+        // Show slouch dialog
+        handler.postDelayed(this::showSlouchDialog, 3000);
     }
+
+
 
     public boolean isCalibrating() {
         return currentStep != CalibrationStep.IDLE && currentStep != CalibrationStep.COMPLETE;
     }
 
     private void processAndSaveSlouchData() {
-
         // Cancel any pending timeout
         if (connectionTimeoutRunnable != null) {
             handler.removeCallbacks(connectionTimeoutRunnable);
@@ -450,38 +457,44 @@ public class CalibrationHelper {
                 System.currentTimeMillis()
         );
 
-        calibrationData.upperBackSlouch = SensorAngles.fromSensorData(upperBack);
-        calibrationData.lowerBackSlouch = SensorAngles.fromSensorData(lowerBack);
+        // Convert to angles
+        SensorAngles upperAngles = SensorAngles.fromSensorData(upperBack);
+        SensorAngles lowerAngles = SensorAngles.fromSensorData(lowerBack);
 
-        Log.d(TAG, "✓ Slouch data saved (averaged from " +
-                upperBackDataList.size() + " upper, " +
-                lowerBackDataList.size() + " lower samples):");
-        Log.d(TAG, "  Upper - Roll: " + calibrationData.upperBackSlouch.roll +
-                "° Pitch: " + calibrationData.upperBackSlouch.pitch + "°");
-        Log.d(TAG, "  Lower - Roll: " + calibrationData.lowerBackSlouch.roll +
-                "° Pitch: " + calibrationData.lowerBackSlouch.pitch + "°");
+        // Store angles
+        calibrationData.upperBackSlouch = upperAngles;
+        calibrationData.lowerBackSlouch = lowerAngles;
 
-        // Calculate thresholds (midpoint between upright and slouch)
-        float upperPitchDiff = Math.abs(
-                calibrationData.upperBackUpright.pitch - calibrationData.upperBackSlouch.pitch
-        );
-        float lowerPitchDiff = Math.abs(
-                calibrationData.lowerBackUpright.pitch - calibrationData.lowerBackSlouch.pitch
-        );
+        // Calculate spine curvature when slouching
+        float slouchPitchDiff = upperAngles.pitch - lowerAngles.pitch;
+        float slouchRollDiff = upperAngles.roll - lowerAngles.roll;
 
-        calibrationData.upperBackThreshold = upperPitchDiff / 2;
-        calibrationData.lowerBackThreshold = lowerPitchDiff / 2;
+        // Calculate upright spine curvature (for reference)
+        float uprightPitchDiff = calibrationData.upperBackUpright.pitch - calibrationData.lowerBackUpright.pitch;
+        float uprightRollDiff = calibrationData.upperBackUpright.roll - calibrationData.lowerBackUpright.roll;
+
+        // NEW THRESHOLDS: Based on change in spine curvature
+        // This measures how much the spine CURVES when slouching vs upright
+        calibrationData.upperBackThreshold = Math.abs(slouchPitchDiff - uprightPitchDiff);
+        calibrationData.lowerBackThreshold = Math.abs(slouchRollDiff - uprightRollDiff);
 
         calibrationData.calibrationTimestamp = System.currentTimeMillis();
         calibrationData.isCalibrated = true;
 
-        Log.d(TAG, "Calculated thresholds:");
-        Log.d(TAG, "  Upper: " + calibrationData.upperBackThreshold + "°");
-        Log.d(TAG, "  Lower: " + calibrationData.lowerBackThreshold + "°");
+        Log.d(TAG, "✓ Slouch data saved (averaged from " +
+                upperBackDataList.size() + " upper, " +
+                lowerBackDataList.size() + " lower samples):");
+        Log.d(TAG, "  Upper - Roll: " + upperAngles.roll + "° Pitch: " + upperAngles.pitch + "°");
+        Log.d(TAG, "  Lower - Roll: " + lowerAngles.roll + "° Pitch: " + lowerAngles.pitch + "°");
+        Log.d(TAG, "  Spine Curvature - Pitch diff: " + slouchPitchDiff + "° Roll diff: " + slouchRollDiff + "°");
+        Log.d(TAG, "");
+        Log.d(TAG, "Calculated thresholds (change in spine curvature):");
+        Log.d(TAG, "  Pitch threshold: " + calibrationData.upperBackThreshold + "° (curvature change)");
+        Log.d(TAG, "  Roll threshold: " + calibrationData.lowerBackThreshold + "° (twist change)");
 
         Toast.makeText(context, "✓ Slouched posture recorded!\n" +
-                        "Upper: " + upperBackDataList.size() + " samples\n" +
-                        "Lower: " + lowerBackDataList.size() + " samples",
+                        "Pitch threshold: " + String.format("%.1f°", calibrationData.upperBackThreshold) + "\n" +
+                        "Roll threshold: " + String.format("%.1f°", calibrationData.lowerBackThreshold),
                 Toast.LENGTH_LONG).show();
 
         // Save to Firebase
@@ -530,9 +543,10 @@ public class CalibrationHelper {
                     // Show success dialog
                     new AlertDialog.Builder(context)
                             .setTitle("Calibration Complete!")
-                            .setMessage("✓ Your personalized posture thresholds have been saved.\n\n" +
-                                    "Upper back threshold: " + String.format("%.1f°", calibrationData.upperBackThreshold) + "\n" +
-                                    "Lower back threshold: " + String.format("%.1f°", calibrationData.lowerBackThreshold))
+                            .setMessage("✓ Your personalized spine curvature thresholds have been saved.\n\n" +
+                                    "Pitch curvature threshold: " + String.format("%.1f°", calibrationData.upperBackThreshold) + "\n" +
+                                    "Roll twist threshold: " + String.format("%.1f°", calibrationData.lowerBackThreshold) + "\n\n" +
+                                    "The system now detects slouching by measuring how your spine curves, not just tilt!")
                             .setPositiveButton("OK", (dialog, which) -> {
                                 if (listener != null) {
                                     listener.onCalibrationComplete(calibrationData);
@@ -548,6 +562,8 @@ public class CalibrationHelper {
                     cancelCalibration();
                 });
     }
+
+
 
     private void cleanupDataCollectionObservers() {
         if (bluetoothViewModel != null) {
