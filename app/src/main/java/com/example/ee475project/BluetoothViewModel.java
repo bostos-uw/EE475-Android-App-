@@ -228,6 +228,7 @@ public class BluetoothViewModel extends AndroidViewModel {
     }
 
     public void startCycle() {
+        Log.d(TAG, "========== STARTING NEW CYCLE ==========");
         isCycling = true;
         currentDeviceIndex = 0;
         isCycleComplete.setValue(false);
@@ -235,9 +236,14 @@ public class BluetoothViewModel extends AndroidViewModel {
     }
 
     private void scanForNextDevice() {
-        if (!isCycling) return;
+        if (!isCycling) {
+            Log.d(TAG, "scanForNextDevice: Not cycling, returning");
+            return;
+        }
 
         String deviceName = deviceNames[currentDeviceIndex];
+        Log.d(TAG, "Scanning for device: " + deviceName + " (index " + currentDeviceIndex + ")");
+
         List<ScanFilter> filters = new ArrayList<>();
         filters.add(new ScanFilter.Builder().setDeviceName(deviceName).build());
 
@@ -253,6 +259,7 @@ public class BluetoothViewModel extends AndroidViewModel {
     }
 
     public void cancelScan() {
+        Log.d(TAG, "cancelScan called");
         isCycling = false;
         isCycleComplete.setValue(false);
         if (bluetoothLeScanner != null) {
@@ -262,6 +269,7 @@ public class BluetoothViewModel extends AndroidViewModel {
     }
 
     public void disconnect() {
+        Log.d(TAG, "disconnect called");
         isCycling = false;
         if (bluetoothGatt != null) {
             bluetoothGatt.disconnect();
@@ -270,6 +278,7 @@ public class BluetoothViewModel extends AndroidViewModel {
 
     private void connectToDevice(BluetoothDevice device) {
         if (device != null) {
+            Log.d(TAG, "Connecting to device: " + device.getName());
             connectionStatus.setValue("Connecting to " + device.getName());
             bluetoothGatt = device.connectGatt(getApplication(), false, gattCallback);
         }
@@ -309,9 +318,12 @@ public class BluetoothViewModel extends AndroidViewModel {
             String deviceName = gatt.getDevice().getName();
 
             if (newState == BluetoothGatt.STATE_CONNECTED) {
+                Log.d(TAG, "✓ Connected to: " + deviceName);
+
                 if (currentSessionId == null && sessionsRef != null) {
                     currentSessionId = generateSessionId();
                     sessionStartTime = System.currentTimeMillis();
+                    Log.d(TAG, "Created new session: " + currentSessionId);
 
                     PostureSession session = new PostureSession(
                             currentSessionId,
@@ -334,10 +346,15 @@ public class BluetoothViewModel extends AndroidViewModel {
                 gatt.discoverServices();
 
                 if (isCycling) {
-                    handler.postDelayed(() -> gatt.disconnect(), CONNECTION_TIME);
+                    Log.d(TAG, "Scheduling disconnect in " + CONNECTION_TIME + "ms");
+                    handler.postDelayed(() -> {
+                        Log.d(TAG, "Timer expired, disconnecting from: " + deviceName);
+                        gatt.disconnect();
+                    }, CONNECTION_TIME);
                 }
 
             } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
+                Log.d(TAG, "✗ Disconnected from: " + deviceName);
                 timerHandler.removeCallbacks(timerRunnable);
                 dataBuffer.setLength(0);
                 connectionStatus.postValue("Disconnected from " + deviceName);
@@ -349,15 +366,19 @@ public class BluetoothViewModel extends AndroidViewModel {
                 }
 
                 if (isCycling) {
+                    int previousIndex = currentDeviceIndex;
                     currentDeviceIndex = (currentDeviceIndex + 1) % deviceNames.length;
+                    Log.d(TAG, "Device index: " + previousIndex + " -> " + currentDeviceIndex);
 
                     if (currentDeviceIndex == 0) {
+                        Log.d(TAG, "========== CYCLE COMPLETE ==========");
                         Log.d(TAG, "✓ Session cycle complete: " + currentSessionId);
                         currentSessionId = null;
                         isCycleComplete.postValue(true);
+                    } else {
+                        Log.d(TAG, "Scanning for next device in 1 second...");
+                        handler.postDelayed(() -> scanForNextDevice(), 1000);
                     }
-
-                    handler.postDelayed(() -> scanForNextDevice(), 1000);
                 }
             }
         }
@@ -365,6 +386,7 @@ public class BluetoothViewModel extends AndroidViewModel {
         @Override
         public void onServicesDiscovered(BluetoothGatt gatt, int status) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.d(TAG, "Services discovered for: " + gatt.getDevice().getName());
                 BluetoothGattCharacteristic characteristic = gatt.getService(UART_SERVICE_UUID).getCharacteristic(UART_TX_CHARACTERISTIC_UUID);
                 if (characteristic != null) {
                     gatt.setCharacteristicNotification(characteristic, true);
@@ -372,6 +394,7 @@ public class BluetoothViewModel extends AndroidViewModel {
                     if (descriptor != null) {
                         descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
                         gatt.writeDescriptor(descriptor);
+                        Log.d(TAG, "Notifications enabled for: " + gatt.getDevice().getName());
                     }
                 }
             }
@@ -450,7 +473,18 @@ public class BluetoothViewModel extends AndroidViewModel {
                             tempGyroX, tempGyroY, tempGyroZ
                     );
 
-                    if (currentSessionId != null) {
+                    // ====== KEY FIX: Post to LiveData REGARDLESS of session ID ======
+                    // This allows CalibrationHelper to receive data even before session is created
+                    if (identifier.equals("UB")) {
+                        Log.d(TAG, ">>> Upper Back IMU data received - posting to LiveData");
+                        upperBackData.postValue(imuData);
+                    } else if (identifier.equals("LB")) {
+                        Log.d(TAG, ">>> Lower Back IMU data received - posting to LiveData");
+                        lowerBackData.postValue(imuData);
+                    }
+
+                    // Save to Firebase session if session exists
+                    if (currentSessionId != null && sessionsRef != null) {
                         SensorData sensorData = new SensorData(
                                 tempAccelX, tempAccelY, tempAccelZ,
                                 tempGyroX, tempGyroY, tempGyroZ,
@@ -460,12 +494,11 @@ public class BluetoothViewModel extends AndroidViewModel {
                         DatabaseReference sensorRef = sessionsRef.child(currentSessionId);
                         if (identifier.equals("UB")) {
                             sensorRef.child("upperBack").setValue(sensorData);
-                            upperBackData.postValue(imuData);
                         } else if (identifier.equals("LB")) {
                             sensorRef.child("lowerBack").setValue(sensorData);
-                            lowerBackData.postValue(imuData);
                         }
                     }
+
                     hasAccelData = false;
                     hasGyroData = false;
                     currentSensor = "";
