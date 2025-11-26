@@ -3,7 +3,6 @@ package com.example.ee475project;
 import android.Manifest;
 import android.app.Activity;
 import android.bluetooth.BluetoothAdapter;
-import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
@@ -31,6 +30,7 @@ import com.google.firebase.database.DataSnapshot;
 import com.google.firebase.database.DatabaseError;
 import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
+import com.google.firebase.database.Query;
 import com.google.firebase.database.ValueEventListener;
 
 import java.text.SimpleDateFormat;
@@ -59,9 +59,9 @@ public class HomeFragment extends Fragment {
     private BluetoothViewModel bluetoothViewModel;
     private SharedViewModel sharedViewModel;
 
-    // Status card Firebase listener
+    // Status card Firebase listener - FIXED: Use Query instead of DatabaseReference
     private ValueEventListener statusListener;
-    private DatabaseReference statusRef;
+    private Query statusQuery;  // Changed from DatabaseReference to Query
 
     private float currentActiveTime = 0f;
     private int currentDailyGoal = 480; // Default 480 minutes (8 hours)
@@ -94,7 +94,6 @@ public class HomeFragment extends Fragment {
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container,
                              Bundle savedInstanceState) {
-        // Inflate the layout for this fragment
         return inflater.inflate(R.layout.fragment_home, container, false);
     }
 
@@ -124,7 +123,7 @@ public class HomeFragment extends Fragment {
             if (goal != null) {
                 currentDailyGoal = goal;
                 updateDailyGoal(goal);
-                updateDailyGoalProgress(); // Recalculate progress when goal changes
+                updateDailyGoalProgress();
             }
         });
 
@@ -140,91 +139,114 @@ public class HomeFragment extends Fragment {
             if (time != null) {
                 currentActiveTime = time;
                 activeTimeValue.setText(String.format(Locale.US, "%.1f min", time));
-
-                // Update slouch time whenever active time changes
                 updateSlouchTime();
-
-                // Update daily goal progress
                 updateDailyGoalProgress();
+            }
+        });
+
+        // ===== NEW: Observe cycle completion to trigger analysis =====
+        bluetoothViewModel.getIsCycleComplete().observe(getViewLifecycleOwner(), isComplete -> {
+            if (isComplete != null && isComplete) {
+                Log.d(TAG, "Cycle completed! Triggering auto-analysis...");
+                // Small delay to ensure session is saved to Firebase
+                new android.os.Handler().postDelayed(() -> {
+                    if (isAdded()) {
+                        runAnalysisAndUpdateStatus();
+                    }
+                }, 1500);
             }
         });
 
         // Load today's slouch percentage from Firebase
         loadTodaySlouchPercentage();
+
+        // Set up real-time status listener
+        setupRealtimeStatusListener();
     }
 
-    private void loadCurrentPostureStatus() {
+    /**
+     * NEW: Set up a REAL-TIME listener on analyzed sessions
+     * This continuously listens for changes to the most recent analyzed session
+     */
+    private void setupRealtimeStatusListener() {
         String userId = FirebaseAuth.getInstance().getCurrentUser().getUid();
 
-        statusRef = FirebaseDatabase.getInstance()
-                .getReference("posture_sessions")
-                .child(userId);
-
         // Remove old listener if exists
-        if (statusListener != null) {
-            statusRef.removeEventListener(statusListener);
+        if (statusQuery != null && statusListener != null) {
+            statusQuery.removeEventListener(statusListener);
         }
 
-        // Create new listener
+        // Create a query for the most recent analyzed session
+        statusQuery = FirebaseDatabase.getInstance()
+                .getReference("posture_sessions")
+                .child(userId)
+                .orderByChild("analyzed")
+                .equalTo(true)
+                .limitToLast(1);
+
         statusListener = new ValueEventListener() {
             @Override
             public void onDataChange(@NonNull DataSnapshot snapshot) {
-                // SAFETY CHECK: Only update if fragment is attached
                 if (!isAdded() || getContext() == null) {
                     Log.d(TAG, "Fragment not attached, skipping status update");
                     return;
                 }
 
-                // Query for most recent ANALYZED session
-                DatabaseReference analyzedRef = FirebaseDatabase.getInstance()
-                        .getReference("posture_sessions")
-                        .child(userId);
+                Log.d(TAG, "Status listener triggered - analyzed sessions count: " + snapshot.getChildrenCount());
 
-                analyzedRef.orderByChild("analyzed").equalTo(true)
-                        .limitToLast(1)
-                        .addListenerForSingleValueEvent(new ValueEventListener() {
-                            @Override
-                            public void onDataChange(@NonNull DataSnapshot analyzedSnapshot) {
-                                if (!isAdded() || getContext() == null) {
-                                    return;
-                                }
+                if (snapshot.exists() && snapshot.getChildrenCount() > 0) {
+                    // Get the most recent analyzed session
+                    for (DataSnapshot sessionSnapshot : snapshot.getChildren()) {
+                        PostureSession session = sessionSnapshot.getValue(PostureSession.class);
 
-                                if (analyzedSnapshot.exists()) {
-                                    // Get the most recent analyzed session
-                                    for (DataSnapshot sessionSnapshot : analyzedSnapshot.getChildren()) {
-                                        PostureSession session = sessionSnapshot.getValue(PostureSession.class);
+                        if (session != null) {
+                            Log.d(TAG, "Latest analyzed session: " + session.sessionId +
+                                    ", slouching=" + session.slouching +
+                                    ", timestamp=" + session.timestamp);
 
-                                        if (session != null) {
-                                            Log.d(TAG, "Current Status - Last analyzed session: " + session.sessionId +
-                                                    ", slouching=" + session.slouching +
-                                                    ", timestamp=" + session.timestamp);
-
-                                            // Update with the last known status (keeps showing until new one arrives)
-                                            updateStatusCard(session.slouching != null && session.slouching);
-                                        }
-                                    }
-                                } else {
-                                    // No analyzed sessions exist at all - show Unknown
-                                    Log.d(TAG, "No analyzed sessions found - showing Unknown");
-                                    updateStatusCard(null);
-                                }
-                            }
-
-                            @Override
-                            public void onCancelled(@NonNull DatabaseError error) {
-                                Log.e(TAG, "Error loading analyzed sessions: " + error.getMessage());
-                            }
-                        });
+                            // Update status card based on slouching value
+                            updateStatusCard(session.slouching);
+                        }
+                    }
+                } else {
+                    // No analyzed sessions exist - show Unknown
+                    Log.d(TAG, "No analyzed sessions found - showing Unknown");
+                    updateStatusCard(null);
+                }
             }
 
             @Override
             public void onCancelled(@NonNull DatabaseError error) {
-                Log.e(TAG, "Error loading current status: " + error.getMessage());
+                Log.e(TAG, "Error in status listener: " + error.getMessage());
             }
         };
 
-        // Listen to ALL sessions (this triggers re-check when new sessions added)
-        statusRef.addValueEventListener(statusListener);
+        // Add the continuous listener
+        statusQuery.addValueEventListener(statusListener);
+        Log.d(TAG, "Real-time status listener set up");
+    }
+
+    /**
+     * NEW: Run analysis and the status will auto-update via the listener
+     */
+    private void runAnalysisAndUpdateStatus() {
+        Log.d(TAG, "Running analysis after cycle completion...");
+
+        PostureAnalyzer analyzer = new PostureAnalyzer();
+        analyzer.analyzeUnprocessedSessions(new PostureAnalyzer.OnAnalysisCompleteListener() {
+            @Override
+            public void onAnalysisComplete(int sessionsAnalyzed, int slouchingSessions) {
+                Log.d(TAG, "Analysis complete: " + sessionsAnalyzed + " sessions, " +
+                        slouchingSessions + " slouching");
+                // Status card will auto-update via the Firebase listener!
+                // No manual update needed here
+            }
+
+            @Override
+            public void onAnalysisError(String error) {
+                Log.e(TAG, "Analysis error: " + error);
+            }
+        });
     }
 
     /**
@@ -232,45 +254,47 @@ public class HomeFragment extends Fragment {
      * @param isSlouchingNow true = slouching, false = upright, null = no data/not analyzed
      */
     private void updateStatusCard(Boolean isSlouchingNow) {
-        // SAFETY CHECK: Only update if fragment is attached
         if (!isAdded() || getContext() == null) {
             Log.d(TAG, "Fragment not attached, skipping UI update");
             return;
         }
 
-        // Background always stays white
-        statusWidget.setBackgroundResource(R.drawable.rounded_corner_white);
+        Log.d(TAG, "Updating status card: isSlouchingNow = " + isSlouchingNow);
 
         if (isSlouchingNow == null) {
-            // No data ever - show grey
+            // No data - show grey/neutral state
+            statusWidget.setBackgroundResource(R.drawable.rounded_corner_white);
             statusIcon.setImageResource(android.R.drawable.ic_menu_info_details);
+            statusIcon.setColorFilter(ContextCompat.getColor(requireContext(), R.color.ios_text_secondary));
             statusText.setText("Unknown");
-            statusText.setTextColor(getResources().getColor(R.color.ios_text_secondary, null));
+            statusText.setTextColor(ContextCompat.getColor(requireContext(), R.color.ios_text_secondary));
             statusSuggestion.setText("No posture data yet");
-            statusSuggestion.setTextColor(getResources().getColor(R.color.ios_text_secondary, null));
-            Log.d(TAG, "Status card: Unknown (no data)");
+            statusSuggestion.setTextColor(ContextCompat.getColor(requireContext(), R.color.ios_text_secondary));
+            Log.d(TAG, "Status card: Unknown (grey)");
 
         } else if (isSlouchingNow) {
-            // SLOUCHING - Orange text
+            // SLOUCHING - Orange background
+            statusWidget.setBackgroundResource(R.drawable.rounded_corner_orange);
             statusIcon.setImageResource(android.R.drawable.ic_dialog_alert);
+            statusIcon.setColorFilter(ContextCompat.getColor(requireContext(), R.color.white));
             statusText.setText("Slouching");
-            statusText.setTextColor(getResources().getColor(R.color.ios_orange, null));
+            statusText.setTextColor(ContextCompat.getColor(requireContext(), R.color.white));
             statusSuggestion.setText("Consider sitting up straight");
-            statusSuggestion.setTextColor(getResources().getColor(R.color.ios_orange, null));
-            Log.d(TAG, "Status card: Slouching (orange text)");
+            statusSuggestion.setTextColor(ContextCompat.getColor(requireContext(), R.color.white));
+            Log.d(TAG, "Status card: Slouching (orange)");
 
         } else {
-            // UPRIGHT - Green text
+            // UPRIGHT - Green background
+            statusWidget.setBackgroundResource(R.drawable.rounded_corner_green);
             statusIcon.setImageResource(android.R.drawable.checkbox_on_background);
+            statusIcon.setColorFilter(ContextCompat.getColor(requireContext(), R.color.white));
             statusText.setText("Good Posture");
-            statusText.setTextColor(getResources().getColor(R.color.green, null));
+            statusText.setTextColor(ContextCompat.getColor(requireContext(), R.color.white));
             statusSuggestion.setText("Keep it up!");
-            statusSuggestion.setTextColor(getResources().getColor(R.color.green, null));
-            Log.d(TAG, "Status card: Good Posture (green text)");
+            statusSuggestion.setTextColor(ContextCompat.getColor(requireContext(), R.color.white));
+            Log.d(TAG, "Status card: Good Posture (green)");
         }
     }
-
-
 
     private void updateButtonState(String status) {
         connectionStatusText.setText(status);
@@ -287,7 +311,7 @@ public class HomeFragment extends Fragment {
         } else if (status.startsWith("Connected to")) {
             connectButton.setText("Disconnect");
             connectButton.setOnClickListener(v -> bluetoothViewModel.disconnect());
-        } else { // Primarily "Disconnected"
+        } else {
             connectButton.setText("Connect");
             connectButton.setOnClickListener(v -> requestBluetoothPermissions());
         }
@@ -298,50 +322,33 @@ public class HomeFragment extends Fragment {
     }
 
     private void updateDailyGoalProgress() {
-        // Calculate slouch time first
         float slouchTimeMinutes = currentActiveTime * (float)(currentSlouchPercentage / 100.0);
-
-        // Calculate upright time: simply subtract slouch from active
         float uprightTime = currentActiveTime - slouchTimeMinutes;
 
-        // Calculate percentage: (upright_time / daily_goal) × 100
         int percentage = 0;
         if (currentDailyGoal > 0) {
             percentage = (int) ((uprightTime / currentDailyGoal) * 100);
-            // Cap at 100%
             percentage = Math.min(percentage, 100);
         }
 
-        // Update the big number (upright time in minutes)
         dailyGoalValue.setText(String.valueOf((int) uprightTime));
-
-        // Update the percentage text
         dailyGoalPercentage.setText(percentage + "%");
-
-        // Update progress bar
         dailyGoalProgress.setMax(100);
         dailyGoalProgress.setProgress(percentage);
 
-        Log.d(TAG, "=== Daily Goal Calculation ===");
-        Log.d(TAG, "Active Time: " + currentActiveTime + " min");
-        Log.d(TAG, "Slouch Percentage: " + currentSlouchPercentage + "%");
-        Log.d(TAG, "Slouch Time: " + slouchTimeMinutes + " min");
-        Log.d(TAG, "Upright Time: " + uprightTime + " min");
-        Log.d(TAG, "Daily Goal: " + currentDailyGoal + " min");
-        Log.d(TAG, "Completion: " + percentage + "%");
-        Log.d(TAG, "============================");
+        Log.d(TAG, "Daily Goal: Upright=" + uprightTime + "min, " + percentage + "% of " + currentDailyGoal);
     }
 
+    @Override
     public void onDestroyView() {
         super.onDestroyView();
 
         // CRITICAL: Remove Firebase listener to prevent crashes
-        if (statusRef != null && statusListener != null) {
-            statusRef.removeEventListener(statusListener);
+        if (statusQuery != null && statusListener != null) {
+            statusQuery.removeEventListener(statusListener);
             Log.d(TAG, "Status listener removed");
         }
     }
-
 
     private void loadTodaySlouchPercentage() {
         String userId = FirebaseAuth.getInstance().getCurrentUser().getUid();
@@ -361,18 +368,13 @@ public class HomeFragment extends Fragment {
                     if (slouchPercentage != null) {
                         currentSlouchPercentage = slouchPercentage;
                         Log.d(TAG, "Today's slouch percentage: " + currentSlouchPercentage + "%");
-
-                        // Update slouch time with new percentage
                         updateSlouchTime();
-
-                        // ADDED: Update daily goal progress when slouch percentage changes
                         updateDailyGoalProgress();
                     }
                 } else {
-                    // No data for today yet
                     currentSlouchPercentage = 0.0;
                     updateSlouchTime();
-                    updateDailyGoalProgress(); // ADDED
+                    updateDailyGoalProgress();
                 }
             }
 
@@ -387,52 +389,37 @@ public class HomeFragment extends Fragment {
     public void onResume() {
         super.onResume();
 
-        // Manually trigger the daily check when the fragment becomes visible
+        // Trigger the daily check when the fragment becomes visible
         if (bluetoothViewModel != null) {
             bluetoothViewModel.performInitialLoadAndDailyCheck();
         }
 
-        // Load current posture status
-        loadCurrentPostureStatus();
-
-        // Auto-analyze with a slight delay to ensure session is saved
+        // Check for any unanalyzed sessions (in case app was backgrounded)
         new android.os.Handler().postDelayed(() -> {
             if (isAdded()) {
-                autoAnalyzeIfNeeded();
+                checkAndAnalyzeIfNeeded();
             }
-        }, 1000); // 1 second delay
+        }, 500);
     }
 
-    private void autoAnalyzeIfNeeded() {
+    /**
+     * Check if there are unanalyzed sessions and analyze them
+     */
+    private void checkAndAnalyzeIfNeeded() {
         String userId = FirebaseAuth.getInstance().getCurrentUser().getUid();
 
         DatabaseReference sessionsRef = FirebaseDatabase.getInstance()
                 .getReference("posture_sessions")
                 .child(userId);
 
-        // Check if there are any unanalyzed sessions
         sessionsRef.orderByChild("analyzed").equalTo(false)
                 .addListenerForSingleValueEvent(new ValueEventListener() {
                     @Override
                     public void onDataChange(@NonNull DataSnapshot snapshot) {
                         if (snapshot.getChildrenCount() > 0) {
                             Log.d(TAG, "Found " + snapshot.getChildrenCount() +
-                                    " unanalyzed sessions. Auto-analyzing...");
-
-                            // Create analyzer and run analysis silently
-                            PostureAnalyzer analyzer = new PostureAnalyzer();
-                            analyzer.analyzeUnprocessedSessions(new PostureAnalyzer.OnAnalysisCompleteListener() {
-                                @Override
-                                public void onAnalysisComplete(int sessionsAnalyzed, int slouchingSessions) {
-                                    Log.d(TAG, "Auto-analysis complete: " + sessionsAnalyzed + " sessions");
-                                    // Status card will update automatically via Firebase listener
-                                }
-
-                                @Override
-                                public void onAnalysisError(String error) {
-                                    Log.e(TAG, "Auto-analysis error: " + error);
-                                }
-                            });
+                                    " unanalyzed sessions on resume. Analyzing...");
+                            runAnalysisAndUpdateStatus();
                         }
                     }
 
@@ -443,16 +430,12 @@ public class HomeFragment extends Fragment {
                 });
     }
 
-
     private void updateSlouchTime() {
-        // Calculate slouch time: active_time × (slouch_percentage / 100)
         float slouchTimeMinutes = currentActiveTime * (float)(currentSlouchPercentage / 100.0);
 
-        // Update UI
         if (slouchTimeValue != null) {
             slouchTimeValue.setText(String.format(Locale.US, "%.1f min", slouchTimeMinutes));
-            Log.d(TAG, "Slouch time updated: " + slouchTimeMinutes + " min " +
-                    "(Active: " + currentActiveTime + " min, Slouch %: " + currentSlouchPercentage + "%)");
+            Log.d(TAG, "Slouch time: " + slouchTimeMinutes + " min");
         }
     }
 

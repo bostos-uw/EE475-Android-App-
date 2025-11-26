@@ -34,6 +34,18 @@ import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
 import com.google.firebase.database.ValueEventListener;
 
+import org.json.JSONObject;
+
+import java.io.IOException;
+
+import okhttp3.Call;
+import okhttp3.Callback;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+
 
 public class ProfileFragment extends Fragment {
 
@@ -45,6 +57,8 @@ public class ProfileFragment extends Fragment {
     private Button saveGoalButton;
     private Button signOutButton;
     private Button startCalibrationButton;
+    private Button testServerButton;  // NEW: Test server button
+    private EditText serverUrlInput;   // NEW: Input for server URL
     private TextView calibrationStatusText;
     private SharedViewModel sharedViewModel;
     private BluetoothViewModel bluetoothViewModel;
@@ -54,6 +68,8 @@ public class ProfileFragment extends Fragment {
     private FirebaseAuth mAuth;
     private DatabaseReference mDatabase;
     private CalibrationHelper calibrationHelper;
+
+    private OkHttpClient httpClient;  // NEW: HTTP client
 
     @Override
     public void onCreate(@Nullable Bundle savedInstanceState) {
@@ -69,6 +85,9 @@ public class ProfileFragment extends Fragment {
         if (currentUser != null) {
             mDatabase = FirebaseDatabase.getInstance().getReference("users").child(currentUser.getUid());
         }
+
+        // NEW: Initialize HTTP client
+        httpClient = new OkHttpClient();
     }
 
     @Override
@@ -91,14 +110,20 @@ public class ProfileFragment extends Fragment {
         lowerBackStatusText = view.findViewById(R.id.lower_back_status_text);
         lowerBackStatusIndicator = view.findViewById(R.id.lower_back_status_indicator);
 
-        // ===== NEW CODE - Calibration =====
+        // ===== NEW CODE - Server Test =====
+        testServerButton = view.findViewById(R.id.test_server_button);
+        serverUrlInput = view.findViewById(R.id.server_url_input);
+
+        testServerButton.setOnClickListener(v -> testServerConnection());
+
+        // ===== CALIBRATION CODE =====
         startCalibrationButton = view.findViewById(R.id.start_calibration_button);
         calibrationStatusText = view.findViewById(R.id.calibration_status_text);
 
         // Initialize CalibrationHelper WITH BluetoothViewModel
         calibrationHelper = new CalibrationHelper(
                 requireContext(),
-                bluetoothViewModel,  // ← ADDED THIS PARAMETER
+                bluetoothViewModel,
                 new CalibrationHelper.OnCalibrationCompleteListener() {
                     @Override
                     public void onCalibrationComplete(CalibrationData data) {
@@ -119,7 +144,7 @@ public class ProfileFragment extends Fragment {
         loadCalibrationStatus();
 
 
-        // Calibration button click listener - simplified approach
+        // Calibration button click listener
         startCalibrationButton.setOnClickListener(v -> {
             // Check current calibration status
             if (calibrationStatusText.getText().toString().contains("Calibrated")) {
@@ -218,6 +243,96 @@ public class ProfileFragment extends Fragment {
         });
     }
 
+    // ===== NEW METHOD: Test Server Connection =====
+    private void testServerConnection() {
+        String serverUrl = serverUrlInput.getText().toString().trim();
+
+        if (serverUrl.isEmpty()) {
+            Toast.makeText(getContext(), "Please enter server URL", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        // Make sure URL has https:// prefix
+        if (!serverUrl.startsWith("http://") && !serverUrl.startsWith("https://")) {
+            serverUrl = "https://" + serverUrl;
+        }
+
+        // Ensure URL ends with /test
+        if (!serverUrl.endsWith("/test")) {
+            if (serverUrl.endsWith("/")) {
+                serverUrl = serverUrl + "test";
+            } else {
+                serverUrl = serverUrl + "/test";
+            }
+        }
+
+        Log.d(TAG, "Testing server connection to: " + serverUrl);
+        Toast.makeText(getContext(), "Sending test request...", Toast.LENGTH_SHORT).show();
+
+        try {
+            // Create JSON payload
+            JSONObject jsonBody = new JSONObject();
+            jsonBody.put("message", "hello from Android");
+
+            MediaType JSON = MediaType.get("application/json; charset=utf-8");
+            RequestBody body = RequestBody.create(jsonBody.toString(), JSON);
+
+            // Build request
+            Request request = new Request.Builder()
+                    .url(serverUrl)
+                    .post(body)
+                    .build();
+
+            // Send request asynchronously
+            httpClient.newCall(request).enqueue(new Callback() {
+                @Override
+                public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                    Log.e(TAG, "Server test failed: " + e.getMessage(), e);
+                    requireActivity().runOnUiThread(() -> {
+                        Toast.makeText(getContext(),
+                                "❌ Connection failed: " + e.getMessage(),
+                                Toast.LENGTH_LONG).show();
+                    });
+                }
+
+                @Override
+                public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
+                    final String responseBody = response.body() != null ? response.body().string() : "";
+                    Log.d(TAG, "Server response: " + responseBody);
+
+                    requireActivity().runOnUiThread(() -> {
+                        if (response.isSuccessful()) {
+                            try {
+                                JSONObject jsonResponse = new JSONObject(responseBody);
+                                String reply = jsonResponse.optString("reply", "No reply field");
+
+                                new AlertDialog.Builder(requireContext())
+                                        .setTitle("✅ Server Connected!")
+                                        .setMessage("Response from server:\n\n" + reply)
+                                        .setPositiveButton("OK", null)
+                                        .show();
+
+                                Log.d(TAG, "Server test successful: " + reply);
+                            } catch (Exception e) {
+                                Toast.makeText(getContext(),
+                                        "✅ Connected but unexpected response format",
+                                        Toast.LENGTH_LONG).show();
+                            }
+                        } else {
+                            Toast.makeText(getContext(),
+                                    "❌ Server error: " + response.code(),
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    });
+                }
+            });
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error creating request: " + e.getMessage(), e);
+            Toast.makeText(getContext(), "Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
     // ===== CALIBRATION METHODS =====
 
     private void loadCalibrationStatus() {
@@ -299,16 +414,12 @@ public class ProfileFragment extends Fragment {
                 .getReference("calibration_data")
                 .child(userId);
 
-        // Delete the calibration data from Firebase
         calibrationRef.removeValue()
                 .addOnSuccessListener(aVoid -> {
                     Toast.makeText(getContext(),
                             "Calibration data reset. You can now calibrate again.",
                             Toast.LENGTH_SHORT).show();
-
-                    // Update UI to show not calibrated
                     updateCalibrationStatus(false);
-
                 })
                 .addOnFailureListener(e -> {
                     Toast.makeText(getContext(),
@@ -318,7 +429,6 @@ public class ProfileFragment extends Fragment {
     }
 
     private void startFreshCalibration() {
-        // Create fresh helper instance for calibration
         calibrationHelper = new CalibrationHelper(
                 requireContext(),
                 bluetoothViewModel,
@@ -334,15 +444,12 @@ public class ProfileFragment extends Fragment {
                     @Override
                     public void onCalibrationCancelled() {
                         Toast.makeText(getContext(), "Calibration cancelled", Toast.LENGTH_SHORT).show();
-                        // Reload status in case user cancels
                         loadCalibrationStatus();
                     }
                 }
         );
 
         Toast.makeText(getContext(), "Starting calibration cycle...", Toast.LENGTH_SHORT).show();
-
-        // Start calibration
         calibrationHelper.startCalibration();
     }
 }
