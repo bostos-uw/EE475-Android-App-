@@ -217,14 +217,14 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    app:drawableStartCompat="@drawable/ic_weekly_overview"
                     android:drawablePadding="8dp"
+                    android:drawableTint="@color/ios_text_secondary"
                     android:gravity="center_vertical"
                     android:text="@string/weekly_overview"
                     android:textColor="@color/ios_text_primary"
-                    android:drawableTint="@color/ios_text_secondary"
                     android:textSize="22sp"
-                    android:textStyle="bold" />
+                    android:textStyle="bold"
+                    app:drawableStartCompat="@drawable/ic_weekly_overview" />
 
                 <com.github.mikephil.charting.charts.BarChart
                     android:id="@+id/bar_chart"
@@ -330,7 +330,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="@string/upright"
+                            android:text="Total Upright"
                             android:textColor="@color/ios_text_secondary"
                             android:textSize="14sp" />
 
@@ -369,7 +369,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="@string/slouch"
+                            android:text="Total Slouch"
                             android:textColor="@color/ios_text_secondary"
                             android:textSize="14sp" />
 

@@ -203,8 +203,8 @@ public class AnalyticsFragment extends Fragment {
                             // Update pie chart with overall percentage
                             updatePieChart(finalGoodPosture, finalSlouchingSessions);
 
-                            // Load TODAY'S time breakdown (not all-time)
-                            loadTodayTimeBreakdown();
+                            // Load OVERALL time breakdown (all-time)
+                            loadOverallTimeBreakdown();
 
                             // Update bar chart with weekly data
                             loadWeeklyData();
@@ -230,33 +230,48 @@ public class AnalyticsFragment extends Fragment {
         loadTotalConnectionTime();
     }
 
-    private void loadTodayTimeBreakdown() {
+    private void loadOverallTimeBreakdown() {
         String userId = FirebaseAuth.getInstance().getCurrentUser().getUid();
-        String todayKey = getTodayDateKey();
 
-        // Load today's active time
-        DatabaseReference userRef = FirebaseDatabase.getInstance()
-                .getReference("users")
+        DatabaseReference statsRef = FirebaseDatabase.getInstance()
+                .getReference("daily_stats")
                 .child(userId);
 
-        userRef.child("active_time").addListenerForSingleValueEvent(new ValueEventListener() {
+        // Load ALL daily stats to sum up total time
+        statsRef.addListenerForSingleValueEvent(new ValueEventListener() {
             @Override
             public void onDataChange(@NonNull DataSnapshot snapshot) {
-                float todayActiveMinutes = 0f;
+                float totalUprightMinutes = 0f;
+                float totalSlouchMinutes = 0f;
 
-                if (snapshot.exists()) {
-                    Float activeTime = snapshot.getValue(Float.class);
-                    todayActiveMinutes = (activeTime != null) ? activeTime : 0f;
+                // Sum up all days
+                for (DataSnapshot daySnapshot : snapshot.getChildren()) {
+                    Float uprightMin = daySnapshot.child("upright_minutes").getValue(Float.class);
+                    Float slouchMin = daySnapshot.child("slouch_minutes").getValue(Float.class);
+
+                    if (uprightMin != null) {
+                        totalUprightMinutes += uprightMin;
+                    }
+                    if (slouchMin != null) {
+                        totalSlouchMinutes += slouchMin;
+                    }
                 }
 
-                // Now get today's slouch percentage
-                float finalActiveTime = todayActiveMinutes;
-                loadTodaySlouchPercentageForCards(finalActiveTime);
+                // Convert to hours
+                float totalUprightHours = totalUprightMinutes / 60.0f;
+                float totalSlouchHours = totalSlouchMinutes / 60.0f;
+
+                requireActivity().runOnUiThread(() -> {
+                    updatePostureInfoCards(totalUprightHours, totalSlouchHours);
+                });
+
+                Log.d(TAG, "Overall time breakdown: Upright=" + totalUprightHours +
+                        "h, Slouch=" + totalSlouchHours + "h");
             }
 
             @Override
             public void onCancelled(@NonNull DatabaseError error) {
-                Log.e(TAG, "Error loading today's active time: " + error.getMessage());
+                Log.e(TAG, "Error loading overall time: " + error.getMessage());
             }
         });
     }
@@ -374,8 +389,8 @@ public class AnalyticsFragment extends Fragment {
                 getResources().getColor(R.color.ios_orange, null)
         );
 
-        dataSet.setValueTextSize(14f);
-        dataSet.setValueTextColor(getResources().getColor(R.color.white, null));
+        dataSet.setDrawValues(false);
+
 
         PieData data = new PieData(dataSet);
         pieChart.setData(data);
@@ -405,15 +420,32 @@ public class AnalyticsFragment extends Fragment {
                 .getReference("daily_stats")
                 .child(userId);
 
-        // Get last 7 days
+        // Get current week (Monday to Sunday)
         Calendar cal = Calendar.getInstance();
         SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
 
-        // Store data for each day
+        // Store data for each day of the week
         String[] last7Days = new String[7];
-        for (int i = 6; i >= 0; i--) {
-            last7Days[6 - i] = sdf.format(cal.getTime());
-            cal.add(Calendar.DAY_OF_YEAR, -1);
+
+        // Find Monday of current week
+        // Calendar.DAY_OF_WEEK: Sunday=1, Monday=2, ..., Saturday=7
+        int currentDayOfWeek = cal.get(Calendar.DAY_OF_WEEK);
+
+        // Calculate days to subtract to get to Monday
+        int daysToMonday;
+        if (currentDayOfWeek == Calendar.SUNDAY) {
+            daysToMonday = 6; // Sunday is end of week, go back 6 days
+        } else {
+            daysToMonday = currentDayOfWeek - Calendar.MONDAY; // Days since Monday
+        }
+
+        // Go to Monday of this week
+        cal.add(Calendar.DAY_OF_YEAR, -daysToMonday);
+
+        // Build array from Monday to Sunday
+        for (int i = 0; i < 7; i++) {
+            last7Days[i] = sdf.format(cal.getTime());
+            cal.add(Calendar.DAY_OF_YEAR, 1);
         }
 
         // Query each day's stats
@@ -568,14 +600,25 @@ public class AnalyticsFragment extends Fragment {
     }
 
     private String[] getDayLabels() {
-        // Get last 7 days in order (oldest to newest)
+        // Static labels: Monday to Sunday
         SimpleDateFormat dayFormat = new SimpleDateFormat("EEE", Locale.US); // Short day name
         Calendar cal = Calendar.getInstance();
         String[] labels = new String[7];
 
-        // Go back 6 days to start
-        cal.add(Calendar.DAY_OF_YEAR, -6);
+        // Find Monday of current week
+        int currentDayOfWeek = cal.get(Calendar.DAY_OF_WEEK);
 
+        int daysToMonday;
+        if (currentDayOfWeek == Calendar.SUNDAY) {
+            daysToMonday = 6;
+        } else {
+            daysToMonday = currentDayOfWeek - Calendar.MONDAY;
+        }
+
+        // Go to Monday of this week
+        cal.add(Calendar.DAY_OF_YEAR, -daysToMonday);
+
+        // Build labels from Monday to Sunday
         for (int i = 0; i < 7; i++) {
             labels[i] = dayFormat.format(cal.getTime());
             cal.add(Calendar.DAY_OF_YEAR, 1);

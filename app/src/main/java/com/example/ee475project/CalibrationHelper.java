@@ -430,6 +430,10 @@ public class CalibrationHelper {
             bluetoothViewModel.getConnectionStatus().removeObserver(connectionStatusObserver);
         }
 
+        Log.d(TAG, "Processing slouch data:");
+        Log.d(TAG, "  Upper back samples: " + upperBackDataList.size());
+        Log.d(TAG, "  Lower back samples: " + lowerBackDataList.size());
+
         if (upperBackDataList.isEmpty() || lowerBackDataList.isEmpty()) {
             Toast.makeText(context, "Error: No sensor data collected", Toast.LENGTH_LONG).show();
             cancelCalibration();
@@ -443,6 +447,10 @@ public class CalibrationHelper {
         // Average all the collected data points
         ImuData avgUpperBack = averageImuData(upperBackDataList);
         ImuData avgLowerBack = averageImuData(lowerBackDataList);
+
+        Log.d(TAG, "Averaged slouch IMU data:");
+        Log.d(TAG, "  Upper: Accel(" + avgUpperBack.accelX + "," + avgUpperBack.accelY + "," + avgUpperBack.accelZ + ")");
+        Log.d(TAG, "  Lower: Accel(" + avgLowerBack.accelX + "," + avgLowerBack.accelY + "," + avgLowerBack.accelZ + ")");
 
         // Convert averaged IMU data to SensorData format
         SensorData upperBack = new SensorData(
@@ -464,6 +472,13 @@ public class CalibrationHelper {
         // Store angles
         calibrationData.upperBackSlouch = upperAngles;
         calibrationData.lowerBackSlouch = lowerAngles;
+
+        if (calibrationData.lowerBackSlouch == null) {
+            Log.e(TAG, "✗ ERROR: lowerBackSlouch is NULL after assignment!");
+        } else {
+            Log.d(TAG, "✓ lowerBackSlouch saved: Roll=" + calibrationData.lowerBackSlouch.roll +
+                    "° Pitch=" + calibrationData.lowerBackSlouch.pitch + "°");
+        }
 
         // Calculate spine curvature when slouching
         float slouchPitchDiff = upperAngles.pitch - lowerAngles.pitch;

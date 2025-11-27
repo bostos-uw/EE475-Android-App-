@@ -96,6 +96,7 @@ public class ProfileFragment extends Fragment {
         return inflater.inflate(R.layout.fragment_profile, container, false);
     }
 
+
     @Override
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
@@ -452,4 +453,6 @@ public class ProfileFragment extends Fragment {
         Toast.makeText(getContext(), "Starting calibration cycle...", Toast.LENGTH_SHORT).show();
         calibrationHelper.startCalibration();
     }
+
+
 }

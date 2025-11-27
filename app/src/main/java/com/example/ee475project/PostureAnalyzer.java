@@ -207,11 +207,28 @@ public class PostureAnalyzer {
     private AnalysisResult detectSlouchWithCalibration(SensorData upperBack, SensorData lowerBack) {
         AnalysisResult result = new AnalysisResult();
 
+        // ===== DEBUG: Log raw sensor data =====
+        Log.d(TAG, "════════════════════════════════════════════════");
+        Log.d(TAG, "RAW SENSOR DATA:");
+        Log.d(TAG, "  Upper Back - Accel: (" + upperBack.accelX + ", " + upperBack.accelY + ", " + upperBack.accelZ + ")");
+        Log.d(TAG, "  Upper Back - Gyro: (" + upperBack.gyroX + ", " + upperBack.gyroY + ", " + upperBack.gyroZ + ")");
+        Log.d(TAG, "  Lower Back - Accel: (" + lowerBack.accelX + ", " + lowerBack.accelY + ", " + lowerBack.accelZ + ")");
+        Log.d(TAG, "  Lower Back - Gyro: (" + lowerBack.gyroX + ", " + lowerBack.gyroY + ", " + lowerBack.gyroZ + ")");
+
         // Convert sensor data to angles
         SensorAngles currentUpper = SensorAngles.fromSensorData(upperBack);
         SensorAngles currentLower = SensorAngles.fromSensorData(lowerBack);
 
-        // Calculate CURRENT spine curvature (difference between upper and lower)
+        // ===== DEBUG: Log calibration data =====
+        Log.d(TAG, "CALIBRATION DATA:");
+        Log.d(TAG, "  Upright Upper - Roll: " + calibrationData.upperBackUpright.roll + "° Pitch: " + calibrationData.upperBackUpright.pitch + "°");
+        Log.d(TAG, "  Upright Lower - Roll: " + calibrationData.lowerBackUpright.roll + "° Pitch: " + calibrationData.lowerBackUpright.pitch + "°");
+        Log.d(TAG, "  Slouch Upper - Roll: " + calibrationData.upperBackSlouch.roll + "° Pitch: " + calibrationData.upperBackSlouch.pitch + "°");
+        Log.d(TAG, "  Slouch Lower - Roll: " + calibrationData.lowerBackSlouch.roll + "° Pitch: " + calibrationData.lowerBackSlouch.pitch + "°");
+        Log.d(TAG, "  Pitch Threshold: " + calibrationData.upperBackThreshold + "°");
+        Log.d(TAG, "  Roll Threshold: " + calibrationData.lowerBackThreshold + "°");
+
+        // Calculate CURRENT spine curvature
         float currentPitchDiff = currentUpper.pitch - currentLower.pitch;
         float currentRollDiff = currentUpper.roll - currentLower.roll;
 
@@ -219,42 +236,42 @@ public class PostureAnalyzer {
         float uprightPitchDiff = calibrationData.upperBackUpright.pitch - calibrationData.lowerBackUpright.pitch;
         float uprightRollDiff = calibrationData.upperBackUpright.roll - calibrationData.lowerBackUpright.roll;
 
-        // Calculate deviation from upright spine curvature
+        // Calculate deviation
         float pitchDeviation = Math.abs(currentPitchDiff - uprightPitchDiff);
         float rollDeviation = Math.abs(currentRollDiff - uprightRollDiff);
 
-        result.upperBackDeviation = pitchDeviation;  // Storing pitch curvature deviation
-        result.lowerBackDeviation = rollDeviation;   // Storing roll curvature deviation
+        result.upperBackDeviation = pitchDeviation;
+        result.lowerBackDeviation = rollDeviation;
 
-        // Apply 65% threshold to curvature changes
+        // Apply 65% threshold
         float pitchThreshold = calibrationData.upperBackThreshold * THRESHOLD_MULTIPLIER;
         float rollThreshold = calibrationData.lowerBackThreshold * THRESHOLD_MULTIPLIER;
 
-        Log.d(TAG, "Analyzing posture (Relative Curvature Method):");
+        Log.d(TAG, "CURRENT ANALYSIS:");
         Log.d(TAG, "  Current Upper - Roll: " + currentUpper.roll + "° Pitch: " + currentUpper.pitch + "°");
         Log.d(TAG, "  Current Lower - Roll: " + currentLower.roll + "° Pitch: " + currentLower.pitch + "°");
-        Log.d(TAG, "  Current spine curvature - Pitch: " + currentPitchDiff + "° Roll: " + currentRollDiff + "°");
-        Log.d(TAG, "  Upright spine curvature - Pitch: " + uprightPitchDiff + "° Roll: " + uprightRollDiff + "°");
-        Log.d(TAG, "  Pitch deviation: " + pitchDeviation + "° (threshold: " + pitchThreshold + "°)");
-        Log.d(TAG, "  Roll deviation: " + rollDeviation + "° (threshold: " + rollThreshold + "°)");
+        Log.d(TAG, "  Current spine - Pitch diff: " + currentPitchDiff + "° Roll diff: " + currentRollDiff + "°");
+        Log.d(TAG, "  Upright spine - Pitch diff: " + uprightPitchDiff + "° Roll diff: " + uprightRollDiff + "°");
+        Log.d(TAG, "  Deviations - Pitch: " + pitchDeviation + "° Roll: " + rollDeviation + "°");
+        Log.d(TAG, "  Thresholds - Pitch: " + pitchThreshold + "° Roll: " + rollThreshold + "°");
 
-        // Check if slouching (either spine curvature exceeds threshold)
+        // Check if slouching
         boolean pitchSlouchDetected = pitchDeviation > pitchThreshold;
         boolean rollSlouchDetected = rollDeviation > rollThreshold;
 
         result.isSlouchingDetected = pitchSlouchDetected || rollSlouchDetected;
 
-        // Calculate severity scores (0-100)
+        // Calculate scores
         result.upperBackScore = Math.min(100, (int)((pitchDeviation / calibrationData.upperBackThreshold) * 100));
         result.lowerBackScore = Math.min(100, (int)((rollDeviation / calibrationData.lowerBackThreshold) * 100));
-
-        // Overall slouch score (worst of the two)
         result.overallSlouchScore = Math.max(result.upperBackScore, result.lowerBackScore);
 
-        Log.d(TAG, "  Forward slouch (pitch): " + pitchSlouchDetected + " (score: " + result.upperBackScore + "/100)");
-        Log.d(TAG, "  Side slouch (roll): " + rollSlouchDetected + " (score: " + result.lowerBackScore + "/100)");
-        Log.d(TAG, "  Result: " + (result.isSlouchingDetected ? "SLOUCHING" : "GOOD POSTURE") +
-                " (overall score: " + result.overallSlouchScore + "/100)");
+        Log.d(TAG, "RESULTS:");
+        Log.d(TAG, "  Pitch slouch: " + pitchSlouchDetected + " (score: " + result.upperBackScore + "/100)");
+        Log.d(TAG, "  Roll slouch: " + rollSlouchDetected + " (score: " + result.lowerBackScore + "/100)");
+        Log.d(TAG, "  FINAL: " + (result.isSlouchingDetected ? "SLOUCHING" : "GOOD POSTURE") +
+                " (score: " + result.overallSlouchScore + "/100)");
+        Log.d(TAG, "════════════════════════════════════════════════");
 
         return result;
     }
