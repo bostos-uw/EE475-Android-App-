@@ -25,6 +25,11 @@ public class PostureAnalyzer {
     private String userId;
     private CalibrationData calibrationData;
 
+    private static final float FILTER_ALPHA = 0.5f; // 50% smoothing
+
+    // Store previous filtered values (per user, resets on app restart)
+    private Float previousFilteredPitchDiff = null;
+
     public PostureAnalyzer() {
         userId = FirebaseAuth.getInstance().getCurrentUser().getUid();
         sessionsRef = FirebaseDatabase.getInstance()
@@ -160,9 +165,9 @@ public class PostureAnalyzer {
 
                                     analyzedCount++;
 
-                                    // NEW: Use session's timestamp to get the correct date
+                                    // Use session's actual date, not today's date
                                     String sessionDateKey = getDateKeyFromTimestamp(session.timestamp);
-                                    saveDailyStats(userId, getTodayDateKey(), result.isSlouchingDetected);
+                                    saveDailyStats(userId, sessionDateKey, result.isSlouchingDetected);
 
                                 } else {
                                     Log.w(TAG, "⚠ Session incomplete (missing sensor data): " +
@@ -232,6 +237,18 @@ public class PostureAnalyzer {
         float currentPitchDiff = currentUpper.pitch - currentLower.pitch;
         float currentRollDiff = currentUpper.roll - currentLower.roll;
 
+        // === LOW-PASS FILTER: Exponential Moving Average ===
+        if (previousFilteredPitchDiff == null) {
+            // First reading - initialize filter
+            previousFilteredPitchDiff = currentPitchDiff;
+        } else {
+            // Apply EMA filter to smooth out noise
+            currentPitchDiff = FILTER_ALPHA * currentPitchDiff + (1 - FILTER_ALPHA) * previousFilteredPitchDiff;
+            previousFilteredPitchDiff = currentPitchDiff;
+        }
+
+        Log.d(TAG, "  Filtered spine curvature - Pitch diff: " + currentPitchDiff + "°");
+
         // Calculate UPRIGHT spine curvature baseline
         float uprightPitchDiff = calibrationData.upperBackUpright.pitch - calibrationData.lowerBackUpright.pitch;
         float uprightRollDiff = calibrationData.upperBackUpright.roll - calibrationData.lowerBackUpright.roll;
@@ -257,21 +274,18 @@ public class PostureAnalyzer {
 
         // Check if slouching
         boolean pitchSlouchDetected = pitchDeviation > pitchThreshold;
-        boolean rollSlouchDetected = rollDeviation > rollThreshold;
 
-        result.isSlouchingDetected = pitchSlouchDetected || rollSlouchDetected;
+        result.isSlouchingDetected = pitchSlouchDetected;
 
         // Calculate scores
         result.upperBackScore = Math.min(100, (int)((pitchDeviation / calibrationData.upperBackThreshold) * 100));
         result.lowerBackScore = Math.min(100, (int)((rollDeviation / calibrationData.lowerBackThreshold) * 100));
         result.overallSlouchScore = Math.max(result.upperBackScore, result.lowerBackScore);
 
-        Log.d(TAG, "RESULTS:");
-        Log.d(TAG, "  Pitch slouch: " + pitchSlouchDetected + " (score: " + result.upperBackScore + "/100)");
-        Log.d(TAG, "  Roll slouch: " + rollSlouchDetected + " (score: " + result.lowerBackScore + "/100)");
-        Log.d(TAG, "  FINAL: " + (result.isSlouchingDetected ? "SLOUCHING" : "GOOD POSTURE") +
-                " (score: " + result.overallSlouchScore + "/100)");
-        Log.d(TAG, "════════════════════════════════════════════════");
+        Log.d(TAG, "DETECTION DECISION:");
+        Log.d(TAG, "  Pitch slouch: " + pitchSlouchDetected + " (deviation: " + pitchDeviation + "° vs threshold: " + pitchThreshold + "°)");
+        Log.d(TAG, "  Roll detection: DISABLED (too sensitive for forward slouching)");
+        Log.d(TAG, "  FINAL VERDICT: " + (result.isSlouchingDetected ? "SLOUCHING" : "GOOD POSTURE"));
 
         return result;
     }
@@ -392,4 +406,5 @@ public class PostureAnalyzer {
         void onAnalysisComplete(int sessionsAnalyzed, int slouchingSessions);
         void onAnalysisError(String error);
     }
+
 }

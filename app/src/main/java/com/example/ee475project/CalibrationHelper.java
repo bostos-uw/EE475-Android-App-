@@ -398,7 +398,7 @@ public class CalibrationHelper {
         Log.d(TAG, "  Spine Curvature - Pitch diff: " + uprightPitchDiff + "° Roll diff: " + uprightRollDiff + "°");
 
         Toast.makeText(context, "✓ Upright posture recorded!\n" +
-                        "Spine curvature baseline established",
+                        "Pitch baseline: " + String.format("%.1f°", uprightPitchDiff),
                 Toast.LENGTH_LONG).show();
 
         // Reset before next step
@@ -488,10 +488,14 @@ public class CalibrationHelper {
         float uprightPitchDiff = calibrationData.upperBackUpright.pitch - calibrationData.lowerBackUpright.pitch;
         float uprightRollDiff = calibrationData.upperBackUpright.roll - calibrationData.lowerBackUpright.roll;
 
-        // NEW THRESHOLDS: Based on change in spine curvature
+        // THRESHOLDS: Based on change in spine curvature
         // This measures how much the spine CURVES when slouching vs upright
         calibrationData.upperBackThreshold = Math.abs(slouchPitchDiff - uprightPitchDiff);
         calibrationData.lowerBackThreshold = Math.abs(slouchRollDiff - uprightRollDiff);
+
+        // NOTE: Currently only upperBackThreshold (pitch) is used for detection.
+        // lowerBackThreshold (roll) is stored for observation/debugging purposes.
+        // Roll typically has very small changes during forward slouching (<5°).
 
         calibrationData.calibrationTimestamp = System.currentTimeMillis();
         calibrationData.isCalibrated = true;
@@ -503,13 +507,12 @@ public class CalibrationHelper {
         Log.d(TAG, "  Lower - Roll: " + lowerAngles.roll + "° Pitch: " + lowerAngles.pitch + "°");
         Log.d(TAG, "  Spine Curvature - Pitch diff: " + slouchPitchDiff + "° Roll diff: " + slouchRollDiff + "°");
         Log.d(TAG, "");
-        Log.d(TAG, "Calculated thresholds (change in spine curvature):");
-        Log.d(TAG, "  Pitch threshold: " + calibrationData.upperBackThreshold + "° (curvature change)");
-        Log.d(TAG, "  Roll threshold: " + calibrationData.lowerBackThreshold + "° (twist change)");
+        Log.d(TAG, "Calculated threshold:");
+        Log.d(TAG, "  Pitch threshold: " + calibrationData.upperBackThreshold + "° (forward curvature change)");
+        Log.d(TAG, "  Roll threshold: " + calibrationData.lowerBackThreshold + "° (calculated but NOT used in detection)");
 
         Toast.makeText(context, "✓ Slouched posture recorded!\n" +
-                        "Pitch threshold: " + String.format("%.1f°", calibrationData.upperBackThreshold) + "\n" +
-                        "Roll threshold: " + String.format("%.1f°", calibrationData.lowerBackThreshold),
+                        "Pitch threshold: " + String.format("%.1f°", calibrationData.upperBackThreshold),
                 Toast.LENGTH_LONG).show();
 
         // Save to Firebase
@@ -558,10 +561,8 @@ public class CalibrationHelper {
                     // Show success dialog
                     new AlertDialog.Builder(context)
                             .setTitle("Calibration Complete!")
-                            .setMessage("✓ Your personalized spine curvature thresholds have been saved.\n\n" +
-                                    "Pitch curvature threshold: " + String.format("%.1f°", calibrationData.upperBackThreshold) + "\n" +
-                                    "Roll twist threshold: " + String.format("%.1f°", calibrationData.lowerBackThreshold) + "\n\n" +
-                                    "The system now detects slouching by measuring how your spine curves, not just tilt!")
+                            .setMessage("✓ Your personalized slouch detection threshold has been saved.\n\n" +
+                                    "Pitch threshold: " + String.format("%.1f°", calibrationData.upperBackThreshold))
                             .setPositiveButton("OK", (dialog, which) -> {
                                 if (listener != null) {
                                     listener.onCalibrationComplete(calibrationData);

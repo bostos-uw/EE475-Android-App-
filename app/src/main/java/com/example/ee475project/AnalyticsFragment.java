@@ -94,10 +94,16 @@ public class AnalyticsFragment extends Fragment {
                                 @Override
                                 public void onAnalysisComplete(int sessionsAnalyzed, int slouchingSessions) {
                                     Log.d(TAG, "Auto-analysis complete: " + sessionsAnalyzed + " sessions");
-                                    requireActivity().runOnUiThread(() -> {
-                                        // Refresh analytics display
-                                        loadAnalyticsData();
-                                    });
+
+                                    // FIXED: Check if fragment is still attached before updating UI
+                                    if (isAdded() && getActivity() != null) {
+                                        requireActivity().runOnUiThread(() -> {
+                                            // Refresh analytics display
+                                            loadAnalyticsData();
+                                        });
+                                    } else {
+                                        Log.d(TAG, "Fragment not attached - skipping UI update");
+                                    }
                                 }
 
                                 @Override
@@ -124,6 +130,10 @@ public class AnalyticsFragment extends Fragment {
         postureAnalyzer.analyzeUnprocessedSessions(new PostureAnalyzer.OnAnalysisCompleteListener() {
             @Override
             public void onAnalysisComplete(int sessionsAnalyzed, int slouchingSessions) {
+                if (!isAdded() || getActivity() == null) {
+                    Log.d(TAG, "Fragment not attached - skipping analysis result update");
+                    return;
+                }
                 requireActivity().runOnUiThread(() -> {
                     // Reset button
                     binding.btnAnalyzePosture.setEnabled(true);
@@ -148,6 +158,11 @@ public class AnalyticsFragment extends Fragment {
 
             @Override
             public void onAnalysisError(String error) {
+
+                if (!isAdded() || getActivity() == null) {
+                    Log.d(TAG, "Fragment not attached - skipping error display");
+                    return;
+                }
                 requireActivity().runOnUiThread(() -> {
                     binding.btnAnalyzePosture.setEnabled(true);
                     binding.btnAnalyzePosture.setText("Analyze Posture Data");

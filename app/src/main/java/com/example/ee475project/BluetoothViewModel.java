@@ -331,6 +331,11 @@ public class BluetoothViewModel extends AndroidViewModel {
                 timerHandler.post(timerRunnable);
 
                 bluetoothGatt = gatt;
+
+//                Commented out this line since High priority consumes more power, high sampling rate is only needed for ML training
+//                boolean success = gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH);
+//                Log.d(TAG, "Requested HIGH priority connection: " + (success ? "SUCCESS" : "FAILED"));
+
                 gatt.discoverServices();
 
                 if (isCycling) {
@@ -339,7 +344,9 @@ public class BluetoothViewModel extends AndroidViewModel {
 
             } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
                 timerHandler.removeCallbacks(timerRunnable);
-                dataBuffer.setLength(0);
+                synchronized (dataBuffer) {
+                    dataBuffer.setLength(0);
+                }
                 connectionStatus.postValue("Disconnected from " + deviceName);
                 isConnected.postValue(false);
                 gatt.close();
@@ -381,24 +388,27 @@ public class BluetoothViewModel extends AndroidViewModel {
         public void onCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
             byte[] data = characteristic.getValue();
             String dataChunk = new String(data);
-            dataBuffer.append(dataChunk);
 
-            String bufferContent = dataBuffer.toString();
-            if (bufferContent.contains("\r") || bufferContent.contains("\n")) {
-                bufferContent = bufferContent.replace("\r\n", "\n").replace("\r", "\n");
-                dataBuffer.setLength(0);
-                dataBuffer.append(bufferContent);
+            synchronized (dataBuffer) {
+                dataBuffer.append(dataChunk);
 
-                int newlineIndex;
-                while ((newlineIndex = dataBuffer.indexOf("\n")) != -1) {
-                    final String dataString = dataBuffer.substring(0, newlineIndex).trim();
-                    dataBuffer.delete(0, newlineIndex + 1);
+                String bufferContent = dataBuffer.toString();
+                if (bufferContent.contains("\r") || bufferContent.contains("\n")) {
+                    bufferContent = bufferContent.replace("\r\n", "\n").replace("\r", "\n");
+                    dataBuffer.setLength(0);
+                    dataBuffer.append(bufferContent);
 
-                    if (dataString.isEmpty()) {
-                        continue;
+                    int newlineIndex;
+                    while ((newlineIndex = dataBuffer.indexOf("\n")) != -1) {
+                        final String dataString = dataBuffer.substring(0, newlineIndex).trim();
+                        dataBuffer.delete(0, newlineIndex + 1);
+
+                        if (dataString.isEmpty()) {
+                            continue;
+                        }
+
+                        parseSplitMessage(dataString);
                     }
-
-                    parseSplitMessage(dataString);
                 }
             }
         }
