@@ -8,10 +8,14 @@
         android:icon="@drawable/baseline_home_24" />
     <item
         android:id="@+id/analytics"
-        android:title="View Analytics"
+        android:title="Analytics"
         android:icon="@drawable/outline_analytics_24" />
     <item
+        android:id="@+id/training"
+        android:title="Training"
+        android:icon="@android:drawable/ic_menu_upload" />
+    <item
         android:id="@+id/settings"
-        android:title="User"
+        android:title="Profile"
         android:icon="@drawable/outline_account_circle_24" />
 </menu>

@@ -98,12 +98,16 @@ public class MainActivity extends AppCompatActivity {
             selectedFragment = new HomeFragment();
         } else if (itemId == R.id.analytics) {
             selectedFragment = new AnalyticsFragment();
+        } else if (itemId == R.id.training) {
+            selectedFragment = new TrainingFragment();  // NEW
         } else if (itemId == R.id.settings) {
             selectedFragment = new ProfileFragment();
         }
 
         if (selectedFragment != null) {
-            getSupportFragmentManager().beginTransaction().replace(R.id.fragment_container, selectedFragment).commit();
+            getSupportFragmentManager().beginTransaction()
+                    .replace(R.id.fragment_container, selectedFragment)
+                    .commit();
         }
 
         return true;
