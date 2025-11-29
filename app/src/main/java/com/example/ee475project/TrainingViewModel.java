@@ -27,6 +27,12 @@ import androidx.lifecycle.MutableLiveData;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.Locale;
+
+
+import com.google.firebase.auth.FirebaseAuth;
+
+
 
 /**
  * ViewModel for ML Training Mode
@@ -85,6 +91,12 @@ public class TrainingViewModel extends AndroidViewModel {
     private long phaseStartTime = 0;
     private Handler progressHandler = new Handler(Looper.getMainLooper());
     private Runnable progressUpdateRunnable;
+
+    private String selectedPoseLabel = "";
+
+    private Runnable autoDisconnectRunnable = null;  // Track auto-disconnect handler
+
+
 
     /**
      * Data class for buffered sensor readings
@@ -169,24 +181,48 @@ public class TrainingViewModel extends AndroidViewModel {
         Log.d(TAG, "Training collection cancelled");
         isCycling = false;
 
+        // ✅ FIX: Remove ALL scheduled handlers
+        handler.removeCallbacksAndMessages(null);  // Nuclear option - removes ALL handlers
+
         if (bluetoothLeScanner != null) {
-            handler.removeCallbacks(stopScanRunnable);
-            bluetoothLeScanner.stopScan(leScanCallback);
+            try {
+                bluetoothLeScanner.stopScan(leScanCallback);
+            } catch (Exception e) {
+                Log.w(TAG, "Error stopping scan: " + e.getMessage());
+            }
         }
 
         if (bluetoothGatt != null) {
-            bluetoothGatt.disconnect();
+            try {
+                bluetoothGatt.disconnect();
+                bluetoothGatt.close();
+                bluetoothGatt = null;
+            } catch (Exception e) {
+                Log.w(TAG, "Error disconnecting GATT: " + e.getMessage());
+            }
         }
 
         stopProgressUpdates();
+        autoDisconnectRunnable = null;
         currentPhase.setValue("Cancelled");
         collectionProgress.setValue(0);
     }
 
     private void scanForNextDevice() {
-        if (!isCycling) return;
+        if (!isCycling) {
+            Log.w(TAG, "scanForNextDevice called but cycling is false");
+            return;
+        }
+
+        // ✅ FIX: Safety check
+        if (bluetoothLeScanner == null) {
+            Log.e(TAG, "BluetoothLeScanner is null!");
+            return;
+        }
 
         String deviceName = deviceNames[currentDeviceIndex];
+        Log.d(TAG, "Starting scan for device: " + deviceName);
+
         List<ScanFilter> filters = new ArrayList<>();
         filters.add(new ScanFilter.Builder().setDeviceName(deviceName).build());
 
@@ -194,17 +230,22 @@ public class TrainingViewModel extends AndroidViewModel {
                 .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
                 .build();
 
-        bluetoothLeScanner.startScan(filters, scanSettings, leScanCallback);
-        connectionStatus.setValue("Scanning for " + deviceName);
+        try {
+            bluetoothLeScanner.startScan(filters, scanSettings, leScanCallback);
+            connectionStatus.setValue("Scanning for " + deviceName);
 
-        // Update phase
-        if (currentDeviceIndex == 0) {
-            currentPhase.setValue("Upper Back");
-        } else {
-            currentPhase.setValue("Lower Back");
+            // Update phase
+            if (currentDeviceIndex == 0) {
+                currentPhase.setValue("Upper Back");
+            } else {
+                currentPhase.setValue("Lower Back");
+            }
+
+            handler.postDelayed(stopScanRunnable, SCAN_PERIOD);
+        } catch (Exception e) {
+            Log.e(TAG, "Error starting scan: " + e.getMessage(), e);
+            connectionStatus.setValue("Scan failed: " + e.getMessage());
         }
-
-        handler.postDelayed(stopScanRunnable, SCAN_PERIOD);
     }
 
     private void connectToDevice(BluetoothDevice device) {
@@ -244,19 +285,60 @@ public class TrainingViewModel extends AndroidViewModel {
                 phaseStartTime = System.currentTimeMillis();
                 startProgressUpdates();
 
-                // Auto-disconnect after 2 minutes
+                // ✅ FIX: Store the auto-disconnect runnable so we can cancel it later
                 if (isCycling) {
-                    handler.postDelayed(() -> gatt.disconnect(), CONNECTION_TIME);
+                    // Cancel any existing auto-disconnect handler first
+                    if (autoDisconnectRunnable != null) {
+                        handler.removeCallbacks(autoDisconnectRunnable);
+                        Log.d(TAG, "Removed previous auto-disconnect handler");
+                    }
+
+                    // Create new auto-disconnect handler
+                    autoDisconnectRunnable = () -> {
+                        Log.d(TAG, "Auto-disconnect triggered for " + deviceName);
+                        gatt.disconnect();
+                    };
+
+                    handler.postDelayed(autoDisconnectRunnable, CONNECTION_TIME);
+                    Log.d(TAG, "Scheduled auto-disconnect in " + (CONNECTION_TIME/1000) + " seconds");
                 }
 
             } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
+                Log.d(TAG, "════════════════════════════════════════");
+                Log.d(TAG, "DISCONNECT EVENT for " + deviceName);
+                Log.d(TAG, "Status code: " + status);
+
+                // ✅ FIX: Cancel auto-disconnect handler immediately
+                if (autoDisconnectRunnable != null) {
+                    handler.removeCallbacks(autoDisconnectRunnable);
+                    autoDisconnectRunnable = null;
+                    Log.d(TAG, "Cancelled auto-disconnect handler");
+                }
+
+                // ✅ FIX: Cancel any pending scan timeout
+                handler.removeCallbacks(stopScanRunnable);
+
+                // Clear data buffer
                 synchronized (dataBuffer) {
                     dataBuffer.setLength(0);
                 }
 
                 connectionStatus.postValue("Disconnected from " + deviceName);
                 isConnected.postValue(false);
+
+                // ✅ Disable notifications before closing
+                try {
+                    BluetoothGattCharacteristic characteristic = gatt.getService(UART_SERVICE_UUID)
+                            .getCharacteristic(UART_TX_CHARACTERISTIC_UUID);
+                    if (characteristic != null) {
+                        gatt.setCharacteristicNotification(characteristic, false);
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "Error disabling notifications: " + e.getMessage());
+                }
+
                 gatt.close();
+                Log.d(TAG, "GATT closed for " + deviceName);
 
                 stopProgressUpdates();
 
@@ -265,14 +347,16 @@ public class TrainingViewModel extends AndroidViewModel {
                 }
 
                 if (isCycling) {
-                    // Log buffer sizes
-                    Log.d(TAG, deviceName + " disconnected. Buffer size: " +
-                            (deviceName.equals(DEVICE_NAME_UPPER) ? upperBackBuffer.size() : lowerBackBuffer.size()));
+                    Log.d(TAG, "Current device index: " + currentDeviceIndex);
+                    Log.d(TAG, "Upper back buffer size: " + upperBackBuffer.size());
+                    Log.d(TAG, "Lower back buffer size: " + lowerBackBuffer.size());
 
+                    // Move to next sensor
                     currentDeviceIndex = (currentDeviceIndex + 1) % deviceNames.length;
+                    Log.d(TAG, "Next device index: " + currentDeviceIndex);
 
                     if (currentDeviceIndex == 0) {
-                        // Cycle complete
+                        // Cycle complete - both sensors done
                         Log.d(TAG, "✓ Training collection complete!");
                         Log.d(TAG, "  Upper back readings: " + upperBackBuffer.size());
                         Log.d(TAG, "  Lower back readings: " + lowerBackBuffer.size());
@@ -281,13 +365,24 @@ public class TrainingViewModel extends AndroidViewModel {
                         currentPhase.postValue("Complete");
                         collectionProgress.postValue(100);
 
-                        // Apply timestamp shifting (Option B)
                         applyTimestampShifting();
                     } else {
-                        // Continue to next sensor
-                        handler.postDelayed(() -> scanForNextDevice(), 1000);
+                        // Continue to next sensor (lower back)
+                        Log.d(TAG, "Transitioning to next sensor: " + deviceNames[currentDeviceIndex]);
+                        Log.d(TAG, "Waiting 2 seconds for BLE stack to settle...");
+
+                        // ✅ FIX: Increased delay from 1s to 2s for better reliability
+                        handler.postDelayed(() -> {
+                            if (isCycling) {
+                                Log.d(TAG, "BLE stack settled, starting scan for: " + deviceNames[currentDeviceIndex]);
+                                scanForNextDevice();
+                            } else {
+                                Log.w(TAG, "Cycling was cancelled during delay");
+                            }
+                        }, 2000);  // ✅ Changed from 1000 to 2000ms
                     }
                 }
+                Log.d(TAG, "════════════════════════════════════════");
             }
         }
 
@@ -487,4 +582,114 @@ public class TrainingViewModel extends AndroidViewModel {
         lowerBackStartTime = 0;
         Log.d(TAG, "Buffers cleared");
     }
+
+    /**
+     * Generate JSON from collected training data
+     * @param poseLabel The selected pose label (e.g., "Sitting Upright")
+     * @return JSON string ready for upload
+     */
+    public String generateTrainingJSON(String poseLabel) {
+        if (upperBackBuffer.isEmpty() || lowerBackBuffer.isEmpty()) {
+            Log.e(TAG, "Cannot generate JSON - buffers are empty");
+            return null;
+        }
+
+        try {
+            // Convert pose label to snake_case format
+            String formattedLabel = poseLabel.toLowerCase().replace(" ", "_");
+
+            // Get user ID from Firebase
+            String userId = FirebaseAuth.getInstance().getCurrentUser() != null ?
+                    FirebaseAuth.getInstance().getCurrentUser().getUid() : "unknown_user";
+
+            // Calculate sample rate (samples per second)
+            long upperDuration = upperBackBuffer.get(upperBackBuffer.size() - 1).timestamp -
+                    upperBackBuffer.get(0).timestamp;
+            float sampleRateHz = (upperBackBuffer.size() * 1000f) / upperDuration;
+
+            Log.d(TAG, "Generating JSON:");
+            Log.d(TAG, "  User ID: " + userId);
+            Log.d(TAG, "  Label: " + formattedLabel);
+            Log.d(TAG, "  Upper samples: " + upperBackBuffer.size());
+            Log.d(TAG, "  Lower samples: " + lowerBackBuffer.size());
+            Log.d(TAG, "  Sample rate: " + sampleRateHz + " Hz");
+            Log.d(TAG, "  Duration: " + (upperDuration / 1000f) + " seconds");
+
+            // Build JSON manually (more efficient than using JSONObject for large arrays)
+            StringBuilder json = new StringBuilder();
+            json.append("{\n");
+            json.append("  \"user_id\": \"").append(userId).append("\",\n");
+            json.append("  \"label\": \"").append(formattedLabel).append("\",\n");
+            json.append("  \"collection_timestamp\": ").append(upperBackBuffer.get(0).timestamp).append(",\n");
+            json.append("  \"sample_rate_hz\": ").append(String.format(Locale.US, "%.2f", sampleRateHz)).append(",\n");
+            json.append("  \"duration_seconds\": ").append(upperDuration / 1000f).append(",\n");
+
+            // Upper back data
+            json.append("  \"upper_back\": [\n");
+            long upperStartTime = upperBackBuffer.get(0).timestamp;
+            for (int i = 0; i < upperBackBuffer.size(); i++) {
+                SensorReading reading = upperBackBuffer.get(i);
+                long relativeTime = reading.timestamp - upperStartTime;
+
+                json.append("    {");
+                json.append("\"t\": ").append(relativeTime).append(", ");
+                json.append("\"ax\": ").append(String.format(Locale.US, "%.4f", reading.accelX)).append(", ");
+                json.append("\"ay\": ").append(String.format(Locale.US, "%.4f", reading.accelY)).append(", ");
+                json.append("\"az\": ").append(String.format(Locale.US, "%.4f", reading.accelZ)).append(", ");
+                json.append("\"gx\": ").append(String.format(Locale.US, "%.4f", reading.gyroX)).append(", ");
+                json.append("\"gy\": ").append(String.format(Locale.US, "%.4f", reading.gyroY)).append(", ");
+                json.append("\"gz\": ").append(String.format(Locale.US, "%.4f", reading.gyroZ));
+                json.append("}");
+
+                if (i < upperBackBuffer.size() - 1) {
+                    json.append(",");
+                }
+                json.append("\n");
+            }
+            json.append("  ],\n");
+
+            // Lower back data
+            json.append("  \"lower_back\": [\n");
+            long lowerStartTime = lowerBackBuffer.get(0).timestamp;
+            for (int i = 0; i < lowerBackBuffer.size(); i++) {
+                SensorReading reading = lowerBackBuffer.get(i);
+                long relativeTime = reading.timestamp - lowerStartTime;
+
+                json.append("    {");
+                json.append("\"t\": ").append(relativeTime).append(", ");
+                json.append("\"ax\": ").append(String.format(Locale.US, "%.4f", reading.accelX)).append(", ");
+                json.append("\"ay\": ").append(String.format(Locale.US, "%.4f", reading.accelY)).append(", ");
+                json.append("\"az\": ").append(String.format(Locale.US, "%.4f", reading.accelZ)).append(", ");
+                json.append("\"gx\": ").append(String.format(Locale.US, "%.4f", reading.gyroX)).append(", ");
+                json.append("\"gy\": ").append(String.format(Locale.US, "%.4f", reading.gyroY)).append(", ");
+                json.append("\"gz\": ").append(String.format(Locale.US, "%.4f", reading.gyroZ));
+                json.append("}");
+
+                if (i < lowerBackBuffer.size() - 1) {
+                    json.append(",");
+                }
+                json.append("\n");
+            }
+            json.append("  ]\n");
+            json.append("}");
+
+            Log.d(TAG, "✓ JSON generated successfully (" + json.length() + " characters)");
+            return json.toString();
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error generating JSON: " + e.getMessage(), e);
+            return null;
+        }
+    }
+
+    public void setSelectedPoseLabel(String label) {
+        this.selectedPoseLabel = label;
+    }
+
+    public String getSelectedPoseLabel() {
+        return selectedPoseLabel;
+    }
+
+
+
 }

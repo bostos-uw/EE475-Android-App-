@@ -73,6 +73,55 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
+        <!-- Server Configuration Card -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/server_config_card"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            app:cardBackgroundColor="@color/ios_card_background"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="4dp"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/instructions_card">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Server Configuration"
+                    android:textColor="@color/ios_text_primary"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Python backend URL"
+                    android:textColor="@color/ios_text_secondary"
+                    android:textSize="14sp" />
+
+                <EditText
+                    android:id="@+id/server_url_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/ios_edittext_background"
+                    android:hint="e.g., abcd-1234.ngrok-free.app"
+                    android:inputType="textUri"
+                    android:padding="12dp"
+                    android:textSize="14sp" />
+
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
         <!-- Pose Selection Card -->
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/pose_selection_card"
@@ -84,7 +133,7 @@
             app:cardElevation="4dp"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/instructions_card">
+            app:layout_constraintTop_toBottomOf="@id/server_config_card">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -272,6 +321,8 @@
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@id/btn_cancel_training" />
+
+
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 </ScrollView>
