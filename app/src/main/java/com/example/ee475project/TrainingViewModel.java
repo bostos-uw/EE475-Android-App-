@@ -31,6 +31,14 @@ import java.util.Locale;
 
 
 import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.database.DataSnapshot;
+import com.google.firebase.database.DatabaseError;
+import com.google.firebase.database.DatabaseReference;
+import com.google.firebase.database.FirebaseDatabase;
+import com.google.firebase.database.ValueEventListener;
+
+import java.util.HashMap;
+import java.util.Map;
 
 
 
@@ -94,7 +102,45 @@ public class TrainingViewModel extends AndroidViewModel {
 
     private String selectedPoseLabel = "";
 
+    // Firebase for persistence
+    private DatabaseReference databaseReference;
+    private String currentUserId = null;
+
+    // Store training data for ALL poses
+    private Map<String, PoseData> allTrainingData = new HashMap<>();
+    // Data class to hold upper + lower back data for one pose
+
+    public static class PoseData {
+        public ArrayList<SensorReading> upperBackData;
+        public ArrayList<SensorReading> lowerBackData;
+        public long collectionTimestamp;
+
+        // ✅ ADD METADATA FIELDS
+        public float sampleRateHz;
+        public float durationSeconds;
+
+        public PoseData() {
+            this.upperBackData = new ArrayList<>();
+            this.lowerBackData = new ArrayList<>();
+            this.collectionTimestamp = System.currentTimeMillis();
+            this.sampleRateHz = 0;
+            this.durationSeconds = 0;
+        }
+
+        public PoseData(ArrayList<SensorReading> upper, ArrayList<SensorReading> lower) {
+            this.upperBackData = new ArrayList<>(upper);
+            this.lowerBackData = new ArrayList<>(lower);
+            this.collectionTimestamp = System.currentTimeMillis();
+            this.sampleRateHz = 0;
+            this.durationSeconds = 0;
+        }
+    }
+
+
+
     private Runnable autoDisconnectRunnable = null;  // Track auto-disconnect handler
+
+
 
 
 
@@ -122,6 +168,15 @@ public class TrainingViewModel extends AndroidViewModel {
         BluetoothManager bluetoothManager = (BluetoothManager) application.getSystemService(Context.BLUETOOTH_SERVICE);
         bluetoothAdapter = bluetoothManager.getAdapter();
         bluetoothLeScanner = bluetoothAdapter.getBluetoothLeScanner();
+
+        // Initialize Firebase
+        databaseReference = FirebaseDatabase.getInstance().getReference();
+
+        // Get current user ID
+        if (FirebaseAuth.getInstance().getCurrentUser() != null) {
+            currentUserId = FirebaseAuth.getInstance().getCurrentUser().getUid();
+            loadTrainingDataFromFirebase();
+        }
 
         leScanCallback = new ScanCallback() {
             @Override
@@ -366,6 +421,7 @@ public class TrainingViewModel extends AndroidViewModel {
                         collectionProgress.postValue(100);
 
                         applyTimestampShifting();
+                        saveCurrentPoseToFirebase();
                     } else {
                         // Continue to next sensor (lower back)
                         Log.d(TAG, "Transitioning to next sensor: " + deviceNames[currentDeviceIndex]);
@@ -588,89 +644,158 @@ public class TrainingViewModel extends AndroidViewModel {
      * @param poseLabel The selected pose label (e.g., "Sitting Upright")
      * @return JSON string ready for upload
      */
-    public String generateTrainingJSON(String poseLabel) {
-        if (upperBackBuffer.isEmpty() || lowerBackBuffer.isEmpty()) {
-            Log.e(TAG, "Cannot generate JSON - buffers are empty");
+    /**
+     * Generate JSON from ALL collected training data
+     * @return JSON string with all poses ready for upload
+     */
+    /**
+     * Generate JSON from ALL collected training data
+     * @return JSON string with all poses ready for upload
+     */
+
+    /**
+     * Extract general ML label from specific pose label
+     * sitting_upright → sitting
+     * standing_slouched → standing
+     * walking_upright → walking
+     */
+    private String extractMLLabel(String poseLabel) {
+        if (poseLabel.startsWith("sitting")) {
+            return "sitting";
+        } else if (poseLabel.startsWith("standing")) {
+            return "standing";
+        } else if (poseLabel.equals("walking")) {
+            return "walking";
+        } else {
+            return "unknown";
+        }
+    }
+
+    /**
+     * Generate JSON from ALL collected training data in the exact format required by ML backend
+     * @return JSON string with all poses ready for upload
+     */
+    /**
+     * Generate JSON from ALL collected training data in the exact format required by ML backend
+     * @return JSON string with all poses ready for upload
+     */
+    public String generateTrainingJSON() {
+        if (allTrainingData.isEmpty()) {
+            Log.e(TAG, "Cannot generate JSON - no training data available");
             return null;
         }
 
         try {
-            // Convert pose label to snake_case format
-            String formattedLabel = poseLabel.toLowerCase().replace(" ", "_");
+            String userId = currentUserId != null ? currentUserId : "unknown_user";
 
-            // Get user ID from Firebase
-            String userId = FirebaseAuth.getInstance().getCurrentUser() != null ?
-                    FirebaseAuth.getInstance().getCurrentUser().getUid() : "unknown_user";
-
-            // Calculate sample rate (samples per second)
-            long upperDuration = upperBackBuffer.get(upperBackBuffer.size() - 1).timestamp -
-                    upperBackBuffer.get(0).timestamp;
-            float sampleRateHz = (upperBackBuffer.size() * 1000f) / upperDuration;
-
-            Log.d(TAG, "Generating JSON:");
+            Log.d(TAG, "Generating JSON for ALL poses:");
             Log.d(TAG, "  User ID: " + userId);
-            Log.d(TAG, "  Label: " + formattedLabel);
-            Log.d(TAG, "  Upper samples: " + upperBackBuffer.size());
-            Log.d(TAG, "  Lower samples: " + lowerBackBuffer.size());
-            Log.d(TAG, "  Sample rate: " + sampleRateHz + " Hz");
-            Log.d(TAG, "  Duration: " + (upperDuration / 1000f) + " seconds");
+            Log.d(TAG, "  Number of poses: " + allTrainingData.size());
 
-            // Build JSON manually (more efficient than using JSONObject for large arrays)
+            // Build JSON manually
             StringBuilder json = new StringBuilder();
             json.append("{\n");
             json.append("  \"user_id\": \"").append(userId).append("\",\n");
-            json.append("  \"label\": \"").append(formattedLabel).append("\",\n");
-            json.append("  \"collection_timestamp\": ").append(upperBackBuffer.get(0).timestamp).append(",\n");
-            json.append("  \"sample_rate_hz\": ").append(String.format(Locale.US, "%.2f", sampleRateHz)).append(",\n");
-            json.append("  \"duration_seconds\": ").append(upperDuration / 1000f).append(",\n");
 
-            // Upper back data
-            json.append("  \"upper_back\": [\n");
-            long upperStartTime = upperBackBuffer.get(0).timestamp;
-            for (int i = 0; i < upperBackBuffer.size(); i++) {
-                SensorReading reading = upperBackBuffer.get(i);
-                long relativeTime = reading.timestamp - upperStartTime;
+            // Iterate through poses and number them as pose_1, pose_2, etc.
+            int poseIndex = 1;
+            int totalPoses = allTrainingData.size();
 
-                json.append("    {");
-                json.append("\"t\": ").append(relativeTime).append(", ");
-                json.append("\"ax\": ").append(String.format(Locale.US, "%.4f", reading.accelX)).append(", ");
-                json.append("\"ay\": ").append(String.format(Locale.US, "%.4f", reading.accelY)).append(", ");
-                json.append("\"az\": ").append(String.format(Locale.US, "%.4f", reading.accelZ)).append(", ");
-                json.append("\"gx\": ").append(String.format(Locale.US, "%.4f", reading.gyroX)).append(", ");
-                json.append("\"gy\": ").append(String.format(Locale.US, "%.4f", reading.gyroY)).append(", ");
-                json.append("\"gz\": ").append(String.format(Locale.US, "%.4f", reading.gyroZ));
-                json.append("}");
+            for (Map.Entry<String, PoseData> entry : allTrainingData.entrySet()) {
+                String poseLabel = entry.getKey();
+                PoseData poseData = entry.getValue();
 
-                if (i < upperBackBuffer.size() - 1) {
+                // ✅ USE SAVED METADATA (don't recalculate)
+                float sampleRateHz = poseData.sampleRateHz;
+                float durationSeconds = poseData.durationSeconds;
+
+                // ✅ FALLBACK: If metadata is missing (old data), try to calculate
+                if (sampleRateHz == 0 && poseData.upperBackData.size() > 1) {
+                    long firstTimestamp = poseData.upperBackData.get(0).timestamp;
+                    long lastTimestamp = poseData.upperBackData.get(poseData.upperBackData.size() - 1).timestamp;
+                    long durationMs = lastTimestamp - firstTimestamp;
+
+                    if (durationMs > 0) {
+                        sampleRateHz = (poseData.upperBackData.size() * 1000f) / durationMs;
+                        durationSeconds = durationMs / 1000f;
+                        Log.w(TAG, "Calculated metadata for " + poseLabel + " (missing from Firebase)");
+                    } else {
+                        Log.w(TAG, "Cannot calculate metadata for " + poseLabel + " - using defaults");
+                        // Use reasonable defaults for 2-minute collection at ~16Hz
+                        sampleRateHz = 16.0f;
+                        durationSeconds = 120.0f;
+                    }
+                }
+
+                // Extract general ML label (sitting/standing/walking)
+                String mlLabel = extractMLLabel(poseLabel);
+
+                Log.d(TAG, "  - pose_" + poseIndex + ": " + poseLabel + " (" + mlLabel + ") - " +
+                        poseData.upperBackData.size() + " samples @ " +
+                        String.format(Locale.US, "%.2f", sampleRateHz) + " Hz");
+
+                // Use pose_1, pose_2, pose_3, etc.
+                json.append("  \"pose_").append(poseIndex).append("\": {\n");
+
+                // Add metadata
+                json.append("    \"pose_label\": \"").append(poseLabel).append("\",\n");
+                json.append("    \"ml_label\": \"").append(mlLabel).append("\",\n");
+                json.append("    \"sample_rate_hz\": ").append(String.format(Locale.US, "%.2f", sampleRateHz)).append(",\n");
+                json.append("    \"duration_seconds\": ").append(String.format(Locale.US, "%.2f", durationSeconds)).append(",\n");
+
+                // Upper back data (NO TIMESTAMPS in individual points)
+                json.append("    \"upper_back\": [\n");
+                for (int i = 0; i < poseData.upperBackData.size(); i++) {
+                    SensorReading reading = poseData.upperBackData.get(i);
+
+                    json.append("      {");
+                    json.append("\"ax\": ").append(String.format(Locale.US, "%.4f", reading.accelX)).append(", ");
+                    json.append("\"ay\": ").append(String.format(Locale.US, "%.4f", reading.accelY)).append(", ");
+                    json.append("\"az\": ").append(String.format(Locale.US, "%.4f", reading.accelZ)).append(", ");
+                    json.append("\"gx\": ").append(String.format(Locale.US, "%.4f", reading.gyroX)).append(", ");
+                    json.append("\"gy\": ").append(String.format(Locale.US, "%.4f", reading.gyroY)).append(", ");
+                    json.append("\"gz\": ").append(String.format(Locale.US, "%.4f", reading.gyroZ));
+                    json.append("}");
+
+                    if (i < poseData.upperBackData.size() - 1) {
+                        json.append(",");
+                    }
+                    json.append("\n");
+                }
+                json.append("    ],\n");
+
+                // Lower back data (NO TIMESTAMPS in individual points)
+                json.append("    \"lower_back\": [\n");
+                for (int i = 0; i < poseData.lowerBackData.size(); i++) {
+                    SensorReading reading = poseData.lowerBackData.get(i);
+
+                    json.append("      {");
+                    json.append("\"ax\": ").append(String.format(Locale.US, "%.4f", reading.accelX)).append(", ");
+                    json.append("\"ay\": ").append(String.format(Locale.US, "%.4f", reading.accelY)).append(", ");
+                    json.append("\"az\": ").append(String.format(Locale.US, "%.4f", reading.accelZ)).append(", ");
+                    json.append("\"gx\": ").append(String.format(Locale.US, "%.4f", reading.gyroX)).append(", ");
+                    json.append("\"gy\": ").append(String.format(Locale.US, "%.4f", reading.gyroY)).append(", ");
+                    json.append("\"gz\": ").append(String.format(Locale.US, "%.4f", reading.gyroZ));
+                    json.append("}");
+
+                    if (i < poseData.lowerBackData.size() - 1) {
+                        json.append(",");
+                    }
+                    json.append("\n");
+                }
+                json.append("    ]\n");
+
+                json.append("  }");
+
+                // Add comma if not last pose
+                if (poseIndex < totalPoses) {
                     json.append(",");
                 }
                 json.append("\n");
+
+                poseIndex++;
             }
-            json.append("  ],\n");
 
-            // Lower back data
-            json.append("  \"lower_back\": [\n");
-            long lowerStartTime = lowerBackBuffer.get(0).timestamp;
-            for (int i = 0; i < lowerBackBuffer.size(); i++) {
-                SensorReading reading = lowerBackBuffer.get(i);
-                long relativeTime = reading.timestamp - lowerStartTime;
-
-                json.append("    {");
-                json.append("\"t\": ").append(relativeTime).append(", ");
-                json.append("\"ax\": ").append(String.format(Locale.US, "%.4f", reading.accelX)).append(", ");
-                json.append("\"ay\": ").append(String.format(Locale.US, "%.4f", reading.accelY)).append(", ");
-                json.append("\"az\": ").append(String.format(Locale.US, "%.4f", reading.accelZ)).append(", ");
-                json.append("\"gx\": ").append(String.format(Locale.US, "%.4f", reading.gyroX)).append(", ");
-                json.append("\"gy\": ").append(String.format(Locale.US, "%.4f", reading.gyroY)).append(", ");
-                json.append("\"gz\": ").append(String.format(Locale.US, "%.4f", reading.gyroZ));
-                json.append("}");
-
-                if (i < lowerBackBuffer.size() - 1) {
-                    json.append(",");
-                }
-                json.append("\n");
-            }
-            json.append("  ]\n");
             json.append("}");
 
             Log.d(TAG, "✓ JSON generated successfully (" + json.length() + " characters)");
@@ -682,6 +807,308 @@ public class TrainingViewModel extends AndroidViewModel {
         }
     }
 
+    /**
+     * Save training data to Firebase for the current pose
+     */
+    /**
+     * Save training data to Firebase for the current pose
+     */
+    /**
+     * Save training data to Firebase for the current pose
+     */
+    private void saveCurrentPoseToFirebase() {
+        if (currentUserId == null || selectedPoseLabel == null || selectedPoseLabel.isEmpty()) {
+            Log.w(TAG, "Cannot save to Firebase - no user or pose label");
+            return;
+        }
+
+        if (upperBackBuffer.isEmpty() || lowerBackBuffer.isEmpty()) {
+            Log.w(TAG, "Cannot save to Firebase - buffers are empty");
+            return;
+        }
+
+        String formattedLabel = selectedPoseLabel.toLowerCase().replace(" ", "_");
+
+        Log.d(TAG, "Saving training data to Firebase: " + formattedLabel);
+
+        // ✅ CALCULATE METADATA BEFORE SAVING - MAKE FINAL
+        final float sampleRateHz;
+        final float durationSeconds;
+
+        if (upperBackBuffer.size() > 1) {
+            long firstTimestamp = upperBackBuffer.get(0).timestamp;
+            long lastTimestamp = upperBackBuffer.get(upperBackBuffer.size() - 1).timestamp;
+            long durationMs = lastTimestamp - firstTimestamp;
+
+            if (durationMs > 0) {
+                sampleRateHz = (upperBackBuffer.size() * 1000f) / durationMs;
+                durationSeconds = durationMs / 1000f;
+            } else {
+                sampleRateHz = 0;
+                durationSeconds = 0;
+            }
+        } else {
+            sampleRateHz = 0;
+            durationSeconds = 0;
+        }
+
+        Log.d(TAG, "  Sample rate: " + String.format(Locale.US, "%.2f", sampleRateHz) + " Hz");
+        Log.d(TAG, "  Duration: " + String.format(Locale.US, "%.2f", durationSeconds) + " seconds");
+
+        // Create data structure for Firebase
+        Map<String, Object> poseData = new HashMap<>();
+
+        // ✅ SAVE METADATA (so we don't have to recalculate later)
+        poseData.put("sample_rate_hz", sampleRateHz);
+        poseData.put("duration_seconds", durationSeconds);
+        poseData.put("sample_count", upperBackBuffer.size());
+        poseData.put("collection_timestamp", System.currentTimeMillis());
+
+        // Convert upper back data (without timestamps to save space)
+        List<Map<String, Object>> upperData = new ArrayList<>();
+        for (SensorReading reading : upperBackBuffer) {
+            Map<String, Object> point = new HashMap<>();
+            point.put("ax", reading.accelX);
+            point.put("ay", reading.accelY);
+            point.put("az", reading.accelZ);
+            point.put("gx", reading.gyroX);
+            point.put("gy", reading.gyroY);
+            point.put("gz", reading.gyroZ);
+            upperData.add(point);
+        }
+
+        // Convert lower back data (without timestamps)
+        List<Map<String, Object>> lowerData = new ArrayList<>();
+        for (SensorReading reading : lowerBackBuffer) {
+            Map<String, Object> point = new HashMap<>();
+            point.put("ax", reading.accelX);
+            point.put("ay", reading.accelY);
+            point.put("az", reading.accelZ);
+            point.put("gx", reading.gyroX);
+            point.put("gy", reading.gyroY);
+            point.put("gz", reading.gyroZ);
+            lowerData.add(point);
+        }
+
+        poseData.put("upper_back", upperData);
+        poseData.put("lower_back", lowerData);
+
+        // Save to Firebase
+        databaseReference.child("users")
+                .child(currentUserId)
+                .child("training_data")
+                .child(formattedLabel)
+                .setValue(poseData)
+                .addOnSuccessListener(aVoid -> {
+                    Log.d(TAG, "✓ Training data saved to Firebase: " + formattedLabel);
+
+                    // ✅ NOW THESE VARIABLES ARE FINAL AND CAN BE USED IN LAMBDA
+                    // Also update local cache with metadata
+                    PoseData localData = new PoseData(upperBackBuffer, lowerBackBuffer);
+                    localData.sampleRateHz = sampleRateHz;
+                    localData.durationSeconds = durationSeconds;
+                    allTrainingData.put(formattedLabel, localData);
+                })
+                .addOnFailureListener(e -> {
+                    Log.e(TAG, "Failed to save training data to Firebase: " + e.getMessage(), e);
+                });
+    }
+
+
+    /**
+     * Load all training data from Firebase
+     */
+    private void loadTrainingDataFromFirebase() {
+        if (currentUserId == null) {
+            Log.w(TAG, "Cannot load from Firebase - no user");
+            return;
+        }
+
+        Log.d(TAG, "Loading training data from Firebase...");
+
+        databaseReference.child("users")
+                .child(currentUserId)
+                .child("training_data")
+                .addListenerForSingleValueEvent(new ValueEventListener() {
+                    @Override
+                    public void onDataChange(@NonNull DataSnapshot snapshot) {
+                        allTrainingData.clear();
+
+                        if (!snapshot.exists()) {
+                            Log.d(TAG, "No training data found in Firebase");
+                            return;
+                        }
+
+                        Log.d(TAG, "Firebase snapshot has " + snapshot.getChildrenCount() + " poses");
+
+                        for (DataSnapshot poseSnapshot : snapshot.getChildren()) {
+                            String poseLabel = poseSnapshot.getKey();
+
+                            Log.d(TAG, "Loading pose: " + poseLabel);
+
+                            try {
+                                // Check if data exists
+                                if (!poseSnapshot.child("upper_back").exists()) {
+                                    Log.w(TAG, "No upper_back data for: " + poseLabel);
+                                    continue;
+                                }
+
+                                if (!poseSnapshot.child("lower_back").exists()) {
+                                    Log.w(TAG, "No lower_back data for: " + poseLabel);
+                                    continue;
+                                }
+
+                                // Load upper back data
+                                ArrayList<SensorReading> upperData = new ArrayList<>();
+                                DataSnapshot upperSnapshot = poseSnapshot.child("upper_back");
+
+                                for (DataSnapshot reading : upperSnapshot.getChildren()) {
+                                    try {
+                                        float ax = reading.child("ax").getValue(Float.class);
+                                        float ay = reading.child("ay").getValue(Float.class);
+                                        float az = reading.child("az").getValue(Float.class);
+                                        float gx = reading.child("gx").getValue(Float.class);
+                                        float gy = reading.child("gy").getValue(Float.class);
+                                        float gz = reading.child("gz").getValue(Float.class);
+
+                                        // Use current timestamp since we don't store them anymore
+                                        upperData.add(new SensorReading(System.currentTimeMillis(), ax, ay, az, gx, gy, gz));
+                                    } catch (Exception e) {
+                                        Log.e(TAG, "Error reading upper back sample: " + e.getMessage());
+                                    }
+                                }
+
+                                // Load lower back data
+                                ArrayList<SensorReading> lowerData = new ArrayList<>();
+                                DataSnapshot lowerSnapshot = poseSnapshot.child("lower_back");
+
+                                for (DataSnapshot reading : lowerSnapshot.getChildren()) {
+                                    try {
+                                        float ax = reading.child("ax").getValue(Float.class);
+                                        float ay = reading.child("ay").getValue(Float.class);
+                                        float az = reading.child("az").getValue(Float.class);
+                                        float gx = reading.child("gx").getValue(Float.class);
+                                        float gy = reading.child("gy").getValue(Float.class);
+                                        float gz = reading.child("gz").getValue(Float.class);
+
+                                        lowerData.add(new SensorReading(System.currentTimeMillis(), ax, ay, az, gx, gy, gz));
+                                    } catch (Exception e) {
+                                        Log.e(TAG, "Error reading lower back sample: " + e.getMessage());
+                                    }
+                                }
+
+                                if (upperData.isEmpty() || lowerData.isEmpty()) {
+                                    Log.w(TAG, "Skipping pose with empty data: " + poseLabel);
+                                    continue;
+                                }
+
+                                // Store in local cache
+                                PoseData poseData = new PoseData(upperData, lowerData);
+                                allTrainingData.put(poseLabel, poseData);
+
+                                Log.d(TAG, "✓ Loaded " + poseLabel + ": " + upperData.size() + " upper, " + lowerData.size() + " lower");
+
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error loading pose data: " + poseLabel, e);
+                            }
+                        }
+
+                        Log.d(TAG, "=================================");
+                        Log.d(TAG, "Training data loaded successfully!");
+                        Log.d(TAG, "Total poses in memory: " + allTrainingData.size());
+                        Log.d(TAG, "Pose labels: " + allTrainingData.keySet().toString());
+                        Log.d(TAG, "=================================");
+                    }
+
+                    @Override
+                    public void onCancelled(@NonNull DatabaseError error) {
+                        Log.e(TAG, "Failed to load training data: " + error.getMessage());
+                    }
+                });
+    }
+
+    /**
+     * Delete training data for a specific pose from Firebase
+     */
+    public void deletePoseData(String poseLabel) {
+        if (currentUserId == null) return;
+
+        String formattedLabel = poseLabel.toLowerCase().replace(" ", "_");
+
+        databaseReference.child("users")
+                .child(currentUserId)
+                .child("training_data")
+                .child(formattedLabel)
+                .removeValue()
+                .addOnSuccessListener(aVoid -> {
+                    Log.d(TAG, "✓ Deleted pose data: " + formattedLabel);
+                    allTrainingData.remove(formattedLabel);
+                });
+    }
+
+
+    /**
+     * Clear ALL training data from Firebase
+     */
+    public void clearAllTrainingData() {
+        if (currentUserId == null) return;
+
+        databaseReference.child("users")
+                .child(currentUserId)
+                .child("training_data")
+                .removeValue()
+                .addOnSuccessListener(aVoid -> {
+                    Log.d(TAG, "✓ All training data cleared");
+                    allTrainingData.clear();
+                });
+    }
+
+    /**
+     * Get detailed info about all saved poses
+     */
+    public Map<String, String> getSavedPoseInfo() {
+        Map<String, String> info = new HashMap<>();
+
+        for (Map.Entry<String, PoseData> entry : allTrainingData.entrySet()) {
+            String label = entry.getKey();
+            PoseData data = entry.getValue();
+
+            String details = String.format(Locale.US,
+                    "%d samples, %.1f Hz, %.1f sec",
+                    data.upperBackData.size(),
+                    data.sampleRateHz,
+                    data.durationSeconds
+            );
+
+            info.put(label, details);
+        }
+
+        return info;
+    }
+
+    /**
+     * Check if pose exists in Firebase
+     */
+    public boolean hasPoseInFirebase(String poseLabel) {
+        return allTrainingData.containsKey(poseLabel);
+    }
+
+
+    /**
+     * Get all saved pose labels
+     */
+    public List<String> getSavedPoseLabels() {
+        return new ArrayList<>(allTrainingData.keySet());
+    }
+
+    /**
+     * Check if we have data for a specific pose
+     */
+    public boolean hasPoseData(String poseLabel) {
+        String formattedLabel = poseLabel.toLowerCase().replace(" ", "_");
+        return allTrainingData.containsKey(formattedLabel);
+    }
+
     public void setSelectedPoseLabel(String label) {
         this.selectedPoseLabel = label;
     }
@@ -689,6 +1116,7 @@ public class TrainingViewModel extends AndroidViewModel {
     public String getSelectedPoseLabel() {
         return selectedPoseLabel;
     }
+
 
 
 

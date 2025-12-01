@@ -70,6 +70,7 @@ public class BluetoothViewModel extends AndroidViewModel {
     // Nordic UART Service UUIDs
     private static final UUID UART_SERVICE_UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E");
     private static final UUID UART_TX_CHARACTERISTIC_UUID = UUID.fromString("6E400003-B5A3-F393-E0A9-E50E24DCCA9E");
+    private static final UUID UART_RX_CHARACTERISTIC_UUID = UUID.fromString("6E400002-B5A3-F393-E0A9-E50E24DCCA9E"); // For writing to device
     private static final UUID CLIENT_CHARACTERISTIC_CONFIG = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
 
     private final ScanCallback leScanCallback;
@@ -487,4 +488,57 @@ public class BluetoothViewModel extends AndroidViewModel {
             Log.e(TAG, "Error parsing split message: " + dataString, e);
         }
     }
+
+    // ===== NEW: Send haptic feedback command to device =====
+    /**
+     * Sends a haptic feedback command to the currently connected device
+     * @return true if command was queued successfully, false otherwise
+     */
+    public boolean sendHapticCommand() {
+        if (bluetoothGatt == null) {
+            Log.w(TAG, "Cannot send haptic command - not connected");
+            return false;
+        }
+
+        try {
+            BluetoothGattCharacteristic rxCharacteristic = bluetoothGatt.getService(UART_SERVICE_UUID)
+                    .getCharacteristic(UART_RX_CHARACTERISTIC_UUID);
+
+            if (rxCharacteristic == null) {
+                Log.e(TAG, "RX characteristic not found!");
+                return false;
+            }
+
+            // Simple command: "HAPTIC\n" (8 bytes)
+            String command = "HAPTIC\n";
+            rxCharacteristic.setValue(command.getBytes());
+
+            boolean success = bluetoothGatt.writeCharacteristic(rxCharacteristic);
+
+            if (success) {
+                Log.d(TAG, "✓ Haptic command sent: " + command.trim());
+            } else {
+                Log.e(TAG, "✗ Failed to send haptic command");
+            }
+
+            return success;
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error sending haptic command: " + e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * Get the name of the currently connected device
+     * @return device name or null if not connected
+     */
+    public String getDeviceName() {
+        if (bluetoothGatt != null && bluetoothGatt.getDevice() != null) {
+            return bluetoothGatt.getDevice().getName();
+        }
+        return null;
+    }
+
+
 }

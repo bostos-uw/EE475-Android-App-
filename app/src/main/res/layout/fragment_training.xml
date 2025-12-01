@@ -322,6 +322,20 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@id/btn_cancel_training" />
 
+        <Button
+            android:id="@+id/btn_manage_data"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:backgroundTint="@color/ios_orange"
+            android:text="Manage Saved Data"
+            android:textColor="@color/white"
+            android:visibility="visible"
+            app:cornerRadius="12dp"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/btn_export_json" />
+
 
 
     </androidx.constraintlayout.widget.ConstraintLayout>
