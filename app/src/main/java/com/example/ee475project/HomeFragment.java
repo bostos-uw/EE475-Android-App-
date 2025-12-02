@@ -492,7 +492,6 @@ public class HomeFragment extends Fragment {
 
                                 if (isAdded() && getActivity() != null) {
                                     getActivity().runOnUiThread(() -> {
-                                        // TODO: Parse response and update second status card
                                         Toast.makeText(getContext(),
                                                 "ML Classification: " + response,
                                                 Toast.LENGTH_SHORT).show();
