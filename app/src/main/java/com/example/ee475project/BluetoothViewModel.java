@@ -897,4 +897,49 @@ public class BluetoothViewModel extends AndroidViewModel {
         }
     }
 
+    /**
+     * Send slouch indicator command to trigger red LED on device
+     * @return true if command sent successfully, false otherwise
+     */
+    public boolean sendSlouchIndicator() {
+        if (bluetoothGatt == null) {
+            Log.w(TAG, "Cannot send slouch indicator - not connected");
+            return false;
+        }
+
+        if (!isConnected.getValue()) {
+            Log.w(TAG, "Cannot send slouch indicator - not connected (LiveData check)");
+            return false;
+        }
+
+        try {
+            BluetoothGattCharacteristic rxCharacteristic = bluetoothGatt.getService(UART_SERVICE_UUID)
+                    .getCharacteristic(UART_RX_CHARACTERISTIC_UUID);
+
+            if (rxCharacteristic == null) {
+                Log.e(TAG, "RX characteristic not found!");
+                return false;
+            }
+
+            // Simple command: "SLOUCH\n"
+            String command = "SLOUCH\n";
+            rxCharacteristic.setValue(command.getBytes());
+
+            boolean success = bluetoothGatt.writeCharacteristic(rxCharacteristic);
+
+            if (success) {
+                Log.d(TAG, "✓ Slouch indicator command sent: " + command.trim());
+            } else {
+                Log.e(TAG, "✗ Failed to send slouch indicator command");
+            }
+
+            return success;
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error sending slouch indicator: " + e.getMessage(), e);
+            return false;
+        }
+    }
+
+
 }

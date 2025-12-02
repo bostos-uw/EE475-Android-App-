@@ -336,16 +336,22 @@ public class HomeFragment extends Fragment {
             return;
         }
 
-        // ✅ Run PostureAnalyzer with callback (no userId parameter needed)
+        // ✅ Run PostureAnalyzer with callback
         PostureAnalyzer analyzer = new PostureAnalyzer();
         analyzer.analyzeUnprocessedSessions(new PostureAnalyzer.OnAnalysisCompleteListener() {
             @Override
-            public void onAnalysisComplete(int slouchingCount, int uprightCount) {
+            public void onAnalysisComplete(int sessionsAnalyzed, int slouchingSessions) {
                 if (!isAdded()) return;
 
-                Log.d(TAG, "Analysis complete. Slouching: " + slouchingCount + ", Upright: " + uprightCount);
+                Log.d(TAG, "Analysis complete. Slouching: " + slouchingSessions + ", Upright: " + (sessionsAnalyzed - slouchingSessions));
 
-                // ✅ Now check the most recent session for notification tracking
+                // ✅ CRITICAL FIX: Send slouch indicator if slouching detected
+                if (slouchingSessions > 0) {
+                    Log.d(TAG, "Slouching detected! Sending LED indicator command...");
+                    sendSlouchIndicatorIfNeeded();  // ← THIS IS THE FIX
+                }
+
+                // ✅ Check most recent session for notification tracking
                 DatabaseReference sessionsRef = FirebaseDatabase.getInstance()
                         .getReference("posture_sessions")
                         .child(userId);
@@ -370,30 +376,24 @@ public class HomeFragment extends Fragment {
 
                                     Log.d(TAG, "Session " + sessionId + " → Slouching: " + isSlouchingNow);
 
-                                    // ✅ Track consecutive slouching for notifications
+                                    // Track consecutive slouching for notifications
                                     if (isSlouchingNow) {
                                         consecutiveSlouchCount++;
                                         Log.d(TAG, "Consecutive slouch count: " + consecutiveSlouchCount);
 
-                                        // ✅ Send notification after 2 consecutive slouching sessions
+                                        // Send notification after 2 consecutive slouching sessions
                                         if (consecutiveSlouchCount == 2) {
                                             Log.d(TAG, "🔔 Triggering slouch notification (2 consecutive sessions)");
                                             sendSlouchNotification();
-
-                                            // Optional: Reset counter after notification
-                                            // consecutiveSlouchCount = 0;  // Uncomment to send notification every 2 sessions
                                         }
 
                                     } else {
-                                        // ✅ Reset counter when posture is upright
+                                        // Reset counter when posture is upright
                                         if (consecutiveSlouchCount > 0) {
                                             Log.d(TAG, "Posture corrected! Resetting slouch counter (was: " + consecutiveSlouchCount + ")");
                                         }
                                         consecutiveSlouchCount = 0;
                                     }
-
-                                    // ✅ NOTE: Status card will update automatically via setupRealtimeStatusListener()
-                                    // No need to manually update UI here!
                                 }
                             }
 
@@ -415,6 +415,28 @@ public class HomeFragment extends Fragment {
             }
         });
     }
+
+    /**
+     * Send slouch indicator command to Upper Back device to turn on red LED
+     */
+    private void sendSlouchIndicatorIfNeeded() {
+        // Only send to upper back device
+        String deviceName = bluetoothViewModel.getDeviceName();
+
+        if (deviceName != null && deviceName.equals("XIAO_Upper_Back")) {
+            boolean sent = bluetoothViewModel.sendSlouchIndicator();
+
+            if (sent) {
+                Log.d(TAG, "✓ Slouch indicator command sent to device");
+                // Optional: Show toast for debugging
+                // Toast.makeText(getContext(), "⚠️ Slouch detected! Check red LED", Toast.LENGTH_SHORT).show();
+            } else {
+                Log.w(TAG, "✗ Failed to send slouch indicator");
+            }
+        }
+    }
+
+
 
 
     /**
