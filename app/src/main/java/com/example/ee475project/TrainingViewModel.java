@@ -918,6 +918,9 @@ public class TrainingViewModel extends AndroidViewModel {
     /**
      * Load all training data from Firebase
      */
+    /**
+     * Load all training data from Firebase
+     */
     private void loadTrainingDataFromFirebase() {
         if (currentUserId == null) {
             Log.w(TAG, "Cannot load from Firebase - no user");
@@ -947,6 +950,13 @@ public class TrainingViewModel extends AndroidViewModel {
                             Log.d(TAG, "Loading pose: " + poseLabel);
 
                             try {
+                                // ✅ LOAD SAVED METADATA FIRST
+                                Float savedSampleRate = poseSnapshot.child("sample_rate_hz").getValue(Float.class);
+                                Float savedDuration = poseSnapshot.child("duration_seconds").getValue(Float.class);
+                                Long savedTimestamp = poseSnapshot.child("collection_timestamp").getValue(Long.class);
+
+                                Log.d(TAG, "  Saved metadata - Rate: " + savedSampleRate + " Hz, Duration: " + savedDuration + "s");
+
                                 // Check if data exists
                                 if (!poseSnapshot.child("upper_back").exists()) {
                                     Log.w(TAG, "No upper_back data for: " + poseLabel);
@@ -962,17 +972,28 @@ public class TrainingViewModel extends AndroidViewModel {
                                 ArrayList<SensorReading> upperData = new ArrayList<>();
                                 DataSnapshot upperSnapshot = poseSnapshot.child("upper_back");
 
+                                // ✅ Use dummy timestamps (we have metadata, so we don't need real timestamps)
+                                long dummyTimestamp = savedTimestamp != null ? savedTimestamp : System.currentTimeMillis();
+
                                 for (DataSnapshot reading : upperSnapshot.getChildren()) {
                                     try {
-                                        float ax = reading.child("ax").getValue(Float.class);
-                                        float ay = reading.child("ay").getValue(Float.class);
-                                        float az = reading.child("az").getValue(Float.class);
-                                        float gx = reading.child("gx").getValue(Float.class);
-                                        float gy = reading.child("gy").getValue(Float.class);
-                                        float gz = reading.child("gz").getValue(Float.class);
+                                        Float ax = reading.child("ax").getValue(Float.class);
+                                        Float ay = reading.child("ay").getValue(Float.class);
+                                        Float az = reading.child("az").getValue(Float.class);
+                                        Float gx = reading.child("gx").getValue(Float.class);
+                                        Float gy = reading.child("gy").getValue(Float.class);
+                                        Float gz = reading.child("gz").getValue(Float.class);
 
-                                        // Use current timestamp since we don't store them anymore
-                                        upperData.add(new SensorReading(System.currentTimeMillis(), ax, ay, az, gx, gy, gz));
+                                        // Null checks
+                                        if (ax == null || ay == null || az == null ||
+                                                gx == null || gy == null || gz == null) {
+                                            Log.w(TAG, "Skipping reading with null values");
+                                            continue;
+                                        }
+
+                                        // Use dummy timestamp (doesn't matter since we have metadata)
+                                        upperData.add(new SensorReading(dummyTimestamp, ax, ay, az, gx, gy, gz));
+
                                     } catch (Exception e) {
                                         Log.e(TAG, "Error reading upper back sample: " + e.getMessage());
                                     }
@@ -984,14 +1005,22 @@ public class TrainingViewModel extends AndroidViewModel {
 
                                 for (DataSnapshot reading : lowerSnapshot.getChildren()) {
                                     try {
-                                        float ax = reading.child("ax").getValue(Float.class);
-                                        float ay = reading.child("ay").getValue(Float.class);
-                                        float az = reading.child("az").getValue(Float.class);
-                                        float gx = reading.child("gx").getValue(Float.class);
-                                        float gy = reading.child("gy").getValue(Float.class);
-                                        float gz = reading.child("gz").getValue(Float.class);
+                                        Float ax = reading.child("ax").getValue(Float.class);
+                                        Float ay = reading.child("ay").getValue(Float.class);
+                                        Float az = reading.child("az").getValue(Float.class);
+                                        Float gx = reading.child("gx").getValue(Float.class);
+                                        Float gy = reading.child("gy").getValue(Float.class);
+                                        Float gz = reading.child("gz").getValue(Float.class);
 
-                                        lowerData.add(new SensorReading(System.currentTimeMillis(), ax, ay, az, gx, gy, gz));
+                                        // Null checks
+                                        if (ax == null || ay == null || az == null ||
+                                                gx == null || gy == null || gz == null) {
+                                            Log.w(TAG, "Skipping reading with null values");
+                                            continue;
+                                        }
+
+                                        lowerData.add(new SensorReading(dummyTimestamp, ax, ay, az, gx, gy, gz));
+
                                     } catch (Exception e) {
                                         Log.e(TAG, "Error reading lower back sample: " + e.getMessage());
                                     }
@@ -1002,11 +1031,35 @@ public class TrainingViewModel extends AndroidViewModel {
                                     continue;
                                 }
 
-                                // Store in local cache
+                                // ✅ Create PoseData and SET METADATA
                                 PoseData poseData = new PoseData(upperData, lowerData);
+
+                                // Use saved metadata if available, otherwise calculate defaults
+                                if (savedSampleRate != null && savedSampleRate > 0) {
+                                    poseData.sampleRateHz = savedSampleRate;
+                                } else {
+                                    poseData.sampleRateHz = 16.0f; // Default for 2-min collection
+                                    Log.w(TAG, "No saved sample rate, using default: 16.0 Hz");
+                                }
+
+                                if (savedDuration != null && savedDuration > 0) {
+                                    poseData.durationSeconds = savedDuration;
+                                } else {
+                                    poseData.durationSeconds = 120.0f; // Default 2 minutes
+                                    Log.w(TAG, "No saved duration, using default: 120.0 seconds");
+                                }
+
+                                if (savedTimestamp != null) {
+                                    poseData.collectionTimestamp = savedTimestamp;
+                                }
+
+                                // Store in local cache
                                 allTrainingData.put(poseLabel, poseData);
 
-                                Log.d(TAG, "✓ Loaded " + poseLabel + ": " + upperData.size() + " upper, " + lowerData.size() + " lower");
+                                Log.d(TAG, "✓ Loaded " + poseLabel + ": " +
+                                        upperData.size() + " samples @ " +
+                                        String.format(Locale.US, "%.2f", poseData.sampleRateHz) + " Hz, " +
+                                        String.format(Locale.US, "%.2f", poseData.durationSeconds) + " sec");
 
                             } catch (Exception e) {
                                 Log.e(TAG, "Error loading pose data: " + poseLabel, e);

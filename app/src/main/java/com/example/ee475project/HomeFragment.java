@@ -106,6 +106,20 @@ public class HomeFragment extends Fragment {
     private static final int NOTIFICATION_PERMISSION_REQUEST_CODE = 100;
     private int consecutiveSlouchCount = 0;  // Track consecutive slouching sessions
 
+    private TextView upperBatteryText;
+    private TextView lowerBatteryText;
+    private ImageView upperBatteryIcon;
+    private ImageView lowerBatteryIcon;
+
+    // Battery estimation constants
+    private static final float BATTERY_CAPACITY_MAH = 1000f;
+    private static final float BASELINE_CURRENT_MA = 29f;
+    private static final float USABLE_CAPACITY_MAH = 850f;
+    private static final float RUNTIME_HOURS = USABLE_CAPACITY_MAH / BASELINE_CURRENT_MA;  // ~29 hours
+
+    private static final String BATTERY_PREFS = "BatteryEstimation";
+    private static final String PREF_LAST_NOON_RESET = "last_noon_reset";
+
 
 
     private final ActivityResultLauncher<String[]> requestPermissionLauncher = registerForActivityResult(
@@ -165,6 +179,13 @@ public class HomeFragment extends Fragment {
         httpClient = new OkHttpClient();
         loadMLInferencePreferences();
 
+        // Battery Text Init
+        upperBatteryText = view.findViewById(R.id.upper_back_battery_percentage);
+        lowerBatteryText = view.findViewById(R.id.lower_back_battery_percentage);
+        upperBatteryIcon = view.findViewById(R.id.upper_back_battery_icon);
+        lowerBatteryIcon = view.findViewById(R.id.lower_back_battery_icon);
+
+
         // Save preferences when URL changes
         homeServerUrlInput.addTextChangedListener(new android.text.TextWatcher() {
             @Override
@@ -212,6 +233,15 @@ public class HomeFragment extends Fragment {
 
         bluetoothViewModel.getConnectionStatus().observe(getViewLifecycleOwner(), this::updateButtonState);
 
+        // tracks connection status for battery depletion
+        bluetoothViewModel.getConnectionStatus().observe(getViewLifecycleOwner(), status -> {
+            // Check if it's a new day at noon - reset battery if needed
+            checkAndResetBatteryAtNoon();
+
+            // Update battery display based on current connection
+            updateBatteryEstimates();
+        });
+
         // Observe active time changes
         bluetoothViewModel.getActiveTime().observe(getViewLifecycleOwner(), time -> {
             if (time != null) {
@@ -219,6 +249,7 @@ public class HomeFragment extends Fragment {
                 activeTimeValue.setText(String.format(Locale.US, "%.1f min", time));
                 updateSlouchTime();
                 updateDailyGoalProgress();
+                updateBatteryEstimates();
             }
         });
 
@@ -245,6 +276,7 @@ public class HomeFragment extends Fragment {
                 }, 1500);  // Initial delay for Firebase to save
             }
         });
+
 
         // Load today's slouch percentage from Firebase
         loadTodaySlouchPercentage();
@@ -899,6 +931,114 @@ public class HomeFragment extends Fragment {
         } catch (SecurityException e) {
             Log.e(TAG, "Security exception sending notification: " + e.getMessage());
             requestNotificationPermission();
+        }
+    }
+
+    /**
+     * Update battery estimates based on ACTUAL connection time (not just wall clock time)
+     */
+    private void updateBatteryEstimates() {
+        if (!isAdded() || getContext() == null) {
+            return;
+        }
+
+        // Get total connected minutes from Firebase activeTime
+        // This already tracks cumulative connection time
+        float totalConnectedMinutes = currentActiveTime;  // This is your existing activeTime tracking
+
+        // Convert to hours
+        float totalConnectedHours = totalConnectedMinutes / 60f;
+
+        // Calculate battery percentage
+        // Battery depletes based on ACTUAL connected time, not wall clock time
+        float percentUsed = (totalConnectedHours / RUNTIME_HOURS) * 100f;
+        int batteryPercent = Math.max(0, Math.min(100, (int)(100f - percentUsed)));
+
+        // Update both sensors (same battery percentage since they share power source)
+        updateSensorBattery(upperBatteryText, upperBatteryIcon, batteryPercent);
+        updateSensorBattery(lowerBatteryText, lowerBatteryIcon, batteryPercent);
+
+        Log.d(TAG, String.format(Locale.US,
+                "Battery: %d%% (%.1f min connected / %.1f min total runtime)",
+                batteryPercent, totalConnectedMinutes, RUNTIME_HOURS * 60f));
+    }
+
+
+    /**
+     * Update a single sensor's battery display
+     */
+    private void updateSensorBattery(TextView batteryText, ImageView batteryIcon, int percent) {
+        if (batteryText == null || batteryIcon == null) {
+            return;
+        }
+
+        batteryText.setText(percent + "%");
+
+        // Color based on battery level
+        int color;
+        if (percent > 50) {
+            color = ContextCompat.getColor(requireContext(), R.color.green);  // Green: >50%
+        } else if (percent > 20) {
+            color = ContextCompat.getColor(requireContext(), android.R.color.holo_orange_dark);  // Orange: 20-50%
+        } else {
+            color = ContextCompat.getColor(requireContext(), android.R.color.holo_red_dark);  // Red: <20%
+        }
+
+        batteryText.setTextColor(color);
+        batteryIcon.setColorFilter(color);
+    }
+
+    /**
+     * Check if it's past noon and we haven't reset today yet
+     * Reset battery to 100% (by resetting activeTime) at noon daily
+     */
+    private void checkAndResetBatteryAtNoon() {
+        if (getContext() == null) return;
+
+        android.content.SharedPreferences prefs = getContext().getSharedPreferences(
+                BATTERY_PREFS,
+                android.content.Context.MODE_PRIVATE
+        );
+
+        long currentTimeMillis = System.currentTimeMillis();
+        long lastResetMillis = prefs.getLong(PREF_LAST_NOON_RESET, 0);
+
+        // Get today's noon timestamp
+        java.util.Calendar midnightToday = java.util.Calendar.getInstance();
+        midnightToday.set(java.util.Calendar.HOUR_OF_DAY, 0);
+        midnightToday.set(java.util.Calendar.MINUTE, 0);
+        midnightToday.set(java.util.Calendar.SECOND, 0);
+        midnightToday.set(java.util.Calendar.MILLISECOND, 0);
+
+        long noonTodayMillis = midnightToday.getTimeInMillis();
+
+        // Check if we've passed noon since last reset
+        if (currentTimeMillis >= noonTodayMillis && lastResetMillis < noonTodayMillis) {
+//            Log.d(TAG, "🔋 Noon reached - Resetting battery to 100%");
+
+            // Reset via Firebase (same as your existing daily reset system)
+            String userId = FirebaseAuth.getInstance().getCurrentUser().getUid();
+            DatabaseReference userRef = FirebaseDatabase.getInstance()
+                    .getReference("users")
+                    .child(userId);
+
+            userRef.child("active_time").setValue(0f)
+                    .addOnSuccessListener(aVoid -> {
+                        Log.d(TAG, "✓ Battery reset successful (active_time = 0)");
+
+                        // Save reset timestamp
+                        prefs.edit()
+                                .putLong(PREF_LAST_NOON_RESET, currentTimeMillis)
+                                .apply();
+
+                        // Update battery display
+                        currentActiveTime = 0f;
+                        updateBatteryEstimates();
+
+                    })
+                    .addOnFailureListener(e -> {
+                        Log.e(TAG, "✗ Failed to reset battery: " + e.getMessage());
+                    });
         }
     }
 
