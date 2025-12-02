@@ -1,9 +1,15 @@
 package com.example.ee475project;
 
+import java.util.List;
+
 public class PostureSession {
     public String sessionId;
     public String userId;
     public long timestamp;
+
+    public List<SensorData> upperBackArray;
+    public List<SensorData> lowerBackArray;
+
     public SensorData upperBack;
     public SensorData lowerBack;
     public Boolean analyzed;  // Has this session been analyzed yet?

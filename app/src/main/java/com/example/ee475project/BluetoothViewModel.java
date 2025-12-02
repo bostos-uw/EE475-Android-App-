@@ -39,6 +39,15 @@ import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 
+import java.io.IOException;
+import okhttp3.Call;
+import okhttp3.Callback;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+
 @SuppressLint("MissingPermission")
 public class BluetoothViewModel extends AndroidViewModel {
 
@@ -58,6 +67,8 @@ public class BluetoothViewModel extends AndroidViewModel {
 
     private final DatabaseReference userDbRef;
     private final StringBuilder dataBuffer = new StringBuilder();
+
+    private final OkHttpClient httpClient;
 
     private BluetoothGatt bluetoothGatt;
 
@@ -91,13 +102,21 @@ public class BluetoothViewModel extends AndroidViewModel {
     private long sessionStartTime = 0;
     private DatabaseReference sessionsRef;
 
+    // Buffers for inference data collection
+    private List<SensorData> inferenceUpperBackBuffer = new ArrayList<>();
+    private List<SensorData> inferenceLowerBackBuffer = new ArrayList<>();
+    private long inferenceUpperBackStartTime = 0;
+    private long inferenceLowerBackStartTime = 0;
+
     public BluetoothViewModel(@NonNull Application application) {
         super(application);
         BluetoothManager bluetoothManager = (BluetoothManager) application.getSystemService(Context.BLUETOOTH_SERVICE);
         bluetoothAdapter = bluetoothManager.getAdapter();
         bluetoothLeScanner = bluetoothAdapter.getBluetoothLeScanner();
-
+        httpClient = new OkHttpClient();
         FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+
+
         if (user != null) {
             userDbRef = FirebaseDatabase.getInstance().getReference("users").child(user.getUid());
             performInitialLoadAndDailyCheck(); // Perform the check on initialization
@@ -310,6 +329,7 @@ public class BluetoothViewModel extends AndroidViewModel {
             String deviceName = gatt.getDevice().getName();
 
             if (newState == BluetoothGatt.STATE_CONNECTED) {
+                // ✅ ONLY create new session if we don't have one
                 if (currentSessionId == null && sessionsRef != null) {
                     currentSessionId = generateSessionId();
                     sessionStartTime = System.currentTimeMillis();
@@ -324,6 +344,14 @@ public class BluetoothViewModel extends AndroidViewModel {
                                     Log.d(TAG, "✓ New session created: " + currentSessionId))
                             .addOnFailureListener(e ->
                                     Log.e(TAG, "✗ Failed to create session: " + e.getMessage()));
+
+                    // ✅ Clear inference buffers for new session
+                    inferenceUpperBackBuffer.clear();
+                    inferenceLowerBackBuffer.clear();
+                    inferenceUpperBackStartTime = 0;
+                    inferenceLowerBackStartTime = 0;
+
+                    Log.d(TAG, "New cycle started - Session: " + currentSessionId);
                 }
 
                 connectionStatus.postValue("Connected to " + deviceName);
@@ -332,11 +360,6 @@ public class BluetoothViewModel extends AndroidViewModel {
                 timerHandler.post(timerRunnable);
 
                 bluetoothGatt = gatt;
-
-//                Commented out this line since High priority consumes more power, high sampling rate is only needed for ML training
-//                boolean success = gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH);
-//                Log.d(TAG, "Requested HIGH priority connection: " + (success ? "SUCCESS" : "FAILED"));
-
                 gatt.discoverServices();
 
                 if (isCycling) {
@@ -360,8 +383,16 @@ public class BluetoothViewModel extends AndroidViewModel {
                     currentDeviceIndex = (currentDeviceIndex + 1) % deviceNames.length;
 
                     if (currentDeviceIndex == 0) {
+                        // ✅ CYCLE COMPLETE - PostureAnalyzer will use the LAST saved upperBack/lowerBack
                         Log.d(TAG, "✓ Session cycle complete: " + currentSessionId);
+
+                        // ✅ Save inference arrays for ML (separate from PostureAnalyzer data)
+                        saveInferenceDataToFirebase();
+
+                        // ✅ Reset session for next cycle
                         currentSessionId = null;
+
+                        // ✅ Trigger UI update (PostureAnalyzer will run)
                         isCycleComplete.postValue(true);
                     }
 
@@ -369,6 +400,57 @@ public class BluetoothViewModel extends AndroidViewModel {
                 }
             }
         }
+
+        /**
+         * Save collected inference data arrays to Firebase
+         * ALSO saves legacy single readings for PostureAnalyzer compatibility
+         */
+        /**
+         * Save collected inference data arrays to Firebase
+         * This is SEPARATE from the upperBack/lowerBack used by PostureAnalyzer
+         */
+        private void saveInferenceDataToFirebase() {
+            if (currentSessionId == null || sessionsRef == null) {
+                Log.w(TAG, "Cannot save inference data - no session or reference");
+                return;
+            }
+
+            if (inferenceUpperBackBuffer.isEmpty() || inferenceLowerBackBuffer.isEmpty()) {
+                Log.w(TAG, "Cannot save inference data - buffers are empty");
+                return;
+            }
+
+            Log.d(TAG, "Saving inference arrays to Firebase:");
+            Log.d(TAG, "  Upper back: " + inferenceUpperBackBuffer.size() + " samples");
+            Log.d(TAG, "  Lower back: " + inferenceLowerBackBuffer.size() + " samples");
+
+            DatabaseReference sessionRef = sessionsRef.child(currentSessionId);
+
+            // ✅ Save ONLY the arrays (PostureAnalyzer doesn't need these)
+            sessionRef.child("upperBackArray").setValue(inferenceUpperBackBuffer)
+                    .addOnSuccessListener(aVoid -> {
+                        Log.d(TAG, "✓ Upper back array saved (for ML inference)");
+                    })
+                    .addOnFailureListener(e -> {
+                        Log.e(TAG, "✗ Failed to save upper back array: " + e.getMessage());
+                    });
+
+            sessionRef.child("lowerBackArray").setValue(inferenceLowerBackBuffer)
+                    .addOnSuccessListener(aVoid -> {
+                        Log.d(TAG, "✓ Lower back array saved (for ML inference)");
+                    })
+                    .addOnFailureListener(e -> {
+                        Log.e(TAG, "✗ Failed to save lower back array: " + e.getMessage());
+                    });
+
+            // ✅ Clear buffers for next cycle
+            inferenceUpperBackBuffer.clear();
+            inferenceLowerBackBuffer.clear();
+            inferenceUpperBackStartTime = 0;
+            inferenceLowerBackStartTime = 0;
+        }
+
+
 
         @Override
         public void onServicesDiscovered(BluetoothGatt gatt, int status) {
@@ -462,12 +544,15 @@ public class BluetoothViewModel extends AndroidViewModel {
                     );
 
                     if (currentSessionId != null) {
+                        long currentTime = System.currentTimeMillis();
+
                         SensorData sensorData = new SensorData(
                                 tempAccelX, tempAccelY, tempAccelZ,
                                 tempGyroX, tempGyroY, tempGyroZ,
-                                System.currentTimeMillis()
+                                currentTime
                         );
 
+                        // ✅ ORIGINAL BEHAVIOR: Save to Firebase immediately (for PostureAnalyzer)
                         DatabaseReference sensorRef = sessionsRef.child(currentSessionId);
                         if (identifier.equals("UB")) {
                             sensorRef.child("upperBack").setValue(sensorData);
@@ -475,6 +560,20 @@ public class BluetoothViewModel extends AndroidViewModel {
                         } else if (identifier.equals("LB")) {
                             sensorRef.child("lowerBack").setValue(sensorData);
                             lowerBackData.postValue(imuData);
+                        }
+
+                        // ✅ NEW: ALSO add to inference buffers (separate system)
+                        if (identifier.equals("UB")) {
+                            if (inferenceUpperBackBuffer.isEmpty()) {
+                                inferenceUpperBackStartTime = currentTime;
+                            }
+                            inferenceUpperBackBuffer.add(sensorData);
+
+                        } else if (identifier.equals("LB")) {
+                            if (inferenceLowerBackBuffer.isEmpty()) {
+                                inferenceLowerBackStartTime = currentTime;
+                            }
+                            inferenceLowerBackBuffer.add(sensorData);
                         }
                     }
                     hasAccelData = false;
@@ -540,5 +639,262 @@ public class BluetoothViewModel extends AndroidViewModel {
         return null;
     }
 
+    /**
+     * Callback for inference JSON generation
+     */
+    public interface OnInferenceJSONGeneratedListener {
+        void onJSONGenerated(String json);
+        void onError(String error);
+    }
+
+    /**
+     * Generate inference JSON from MOST RECENT session data (async)
+     * Uses the arrays saved during the last cycle
+     * Format: { user_id, sample_rate_hz, duration_seconds, sample_count, upper_back[], lower_back[] }
+     */
+    public void generateInferenceJSON(OnInferenceJSONGeneratedListener listener) {
+        if (sessionsRef == null) {
+            Log.w(TAG, "No sessions reference available");
+            if (listener != null) {
+                listener.onError("No sessions reference");
+            }
+            return;
+        }
+
+        // Get current user ID
+        String userId = FirebaseAuth.getInstance().getCurrentUser() != null ?
+                FirebaseAuth.getInstance().getCurrentUser().getUid() : "unknown_user";
+
+        // ✅ Find the MOST RECENT session with inference arrays
+        sessionsRef.orderByChild("timestamp").limitToLast(1)
+                .addListenerForSingleValueEvent(new ValueEventListener() {
+                    @Override
+                    public void onDataChange(@NonNull DataSnapshot snapshot) {
+                        if (!snapshot.exists() || snapshot.getChildrenCount() == 0) {
+                            Log.e(TAG, "No sessions found in Firebase");
+                            if (listener != null) {
+                                listener.onError("No sessions found");
+                            }
+                            return;
+                        }
+
+                        // Get the most recent session
+                        DataSnapshot sessionSnapshot = null;
+                        for (DataSnapshot child : snapshot.getChildren()) {
+                            sessionSnapshot = child;  // Will be the last (most recent) one
+                        }
+
+                        if (sessionSnapshot == null) {
+                            if (listener != null) {
+                                listener.onError("No session data");
+                            }
+                            return;
+                        }
+
+                        String sessionId = sessionSnapshot.getKey();
+                        Log.d(TAG, "Generating inference JSON from session: " + sessionId);
+
+                        try {
+                            // Get arrays from Firebase
+                            List<SensorData> upperBackArray = new ArrayList<>();
+                            List<SensorData> lowerBackArray = new ArrayList<>();
+
+                            DataSnapshot upperArraySnapshot = sessionSnapshot.child("upperBackArray");
+                            DataSnapshot lowerArraySnapshot = sessionSnapshot.child("lowerBackArray");
+
+                            // Parse upper back array
+                            for (DataSnapshot reading : upperArraySnapshot.getChildren()) {
+                                SensorData data = reading.getValue(SensorData.class);
+                                if (data != null) {
+                                    upperBackArray.add(data);
+                                }
+                            }
+
+                            // Parse lower back array
+                            for (DataSnapshot reading : lowerArraySnapshot.getChildren()) {
+                                SensorData data = reading.getValue(SensorData.class);
+                                if (data != null) {
+                                    lowerBackArray.add(data);
+                                }
+                            }
+
+                            if (upperBackArray.isEmpty() || lowerBackArray.isEmpty()) {
+                                Log.e(TAG, "No array data found for inference");
+                                if (listener != null) {
+                                    listener.onError("No sensor data arrays found");
+                                }
+                                return;
+                            }
+
+                            // Calculate metadata
+                            int sampleCount = upperBackArray.size();
+
+                            long firstTimestamp = upperBackArray.get(0).timestamp;
+                            long lastTimestamp = upperBackArray.get(upperBackArray.size() - 1).timestamp;
+                            long durationMs = lastTimestamp - firstTimestamp;
+
+                            float sampleRateHz = durationMs > 0 ?
+                                    (sampleCount * 1000f) / durationMs : 0f;
+                            float durationSeconds = durationMs / 1000f;
+
+                            // Build JSON
+                            StringBuilder json = new StringBuilder();
+                            json.append("{\n");
+                            json.append("  \"user_id\": \"").append(userId).append("\",\n");
+                            json.append("  \"sample_rate_hz\": ").append(String.format(Locale.US, "%.2f", sampleRateHz)).append(",\n");
+                            json.append("  \"duration_seconds\": ").append(String.format(Locale.US, "%.2f", durationSeconds)).append(",\n");
+                            json.append("  \"sample_count\": ").append(sampleCount).append(",\n");
+
+                            // Upper back array (without timestamps)
+                            json.append("  \"upper_back\": [\n");
+                            for (int i = 0; i < upperBackArray.size(); i++) {
+                                SensorData reading = upperBackArray.get(i);
+                                json.append("    {");
+                                json.append("\"ax\": ").append(String.format(Locale.US, "%.4f", reading.accelX)).append(", ");
+                                json.append("\"ay\": ").append(String.format(Locale.US, "%.4f", reading.accelY)).append(", ");
+                                json.append("\"az\": ").append(String.format(Locale.US, "%.4f", reading.accelZ)).append(", ");
+                                json.append("\"gx\": ").append(String.format(Locale.US, "%.4f", reading.gyroX)).append(", ");
+                                json.append("\"gy\": ").append(String.format(Locale.US, "%.4f", reading.gyroY)).append(", ");
+                                json.append("\"gz\": ").append(String.format(Locale.US, "%.4f", reading.gyroZ));
+                                json.append("}");
+                                if (i < upperBackArray.size() - 1) {
+                                    json.append(",");
+                                }
+                                json.append("\n");
+                            }
+                            json.append("  ],\n");
+
+                            // Lower back array (without timestamps)
+                            json.append("  \"lower_back\": [\n");
+                            for (int i = 0; i < lowerBackArray.size(); i++) {
+                                SensorData reading = lowerBackArray.get(i);
+                                json.append("    {");
+                                json.append("\"ax\": ").append(String.format(Locale.US, "%.4f", reading.accelX)).append(", ");
+                                json.append("\"ay\": ").append(String.format(Locale.US, "%.4f", reading.accelY)).append(", ");
+                                json.append("\"az\": ").append(String.format(Locale.US, "%.4f", reading.accelZ)).append(", ");
+                                json.append("\"gx\": ").append(String.format(Locale.US, "%.4f", reading.gyroX)).append(", ");
+                                json.append("\"gy\": ").append(String.format(Locale.US, "%.4f", reading.gyroY)).append(", ");
+                                json.append("\"gz\": ").append(String.format(Locale.US, "%.4f", reading.gyroZ));
+                                json.append("}");
+                                if (i < lowerBackArray.size() - 1) {
+                                    json.append(",");
+                                }
+                                json.append("\n");
+                            }
+                            json.append("  ]\n");
+                            json.append("}");
+
+                            Log.d(TAG, "✓ Inference JSON generated:");
+                            Log.d(TAG, "  Session: " + sessionId);
+                            Log.d(TAG, "  Sample count: " + sampleCount);
+                            Log.d(TAG, "  Sample rate: " + String.format(Locale.US, "%.2f", sampleRateHz) + " Hz");
+                            Log.d(TAG, "  Duration: " + String.format(Locale.US, "%.2f", durationSeconds) + " seconds");
+                            Log.d(TAG, "  JSON size: " + json.length() + " characters");
+
+                            if (listener != null) {
+                                listener.onJSONGenerated(json.toString());
+                            }
+
+                        } catch (Exception e) {
+                            Log.e(TAG, "Error generating inference JSON: " + e.getMessage(), e);
+                            if (listener != null) {
+                                listener.onError(e.getMessage());
+                            }
+                        }
+                    }
+
+                    @Override
+                    public void onCancelled(@NonNull DatabaseError error) {
+                        Log.e(TAG, "Error reading session for inference: " + error.getMessage());
+                        if (listener != null) {
+                            listener.onError(error.getMessage());
+                        }
+                    }
+                });
+    }
+
+    /**
+     * Callback for inference upload
+     */
+    public interface OnInferenceUploadListener {
+        void onUploadSuccess(String response);
+        void onUploadFailure(String error);
+    }
+
+    /**
+     * Upload inference JSON to Python backend
+     * @param serverUrl The backend server URL (e.g., "https://abcd-1234.ngrok-free.app")
+     * @param inferenceJSON The JSON string to upload
+     * @param listener Callback for result
+     */
+    public void uploadInferenceData(String serverUrl, String inferenceJSON, OnInferenceUploadListener listener) {
+        if (serverUrl == null || serverUrl.isEmpty()) {
+            Log.e(TAG, "Server URL is empty");
+            if (listener != null) {
+                listener.onUploadFailure("Server URL not configured");
+            }
+            return;
+        }
+
+        // Add https:// prefix if missing
+        if (!serverUrl.startsWith("http://") && !serverUrl.startsWith("https://")) {
+            serverUrl = "https://" + serverUrl;
+        }
+
+        // Add /inference endpoint if not present
+        if (!serverUrl.endsWith("/inference")) {
+            if (serverUrl.endsWith("/")) {
+                serverUrl = serverUrl + "inference";
+            } else {
+                serverUrl = serverUrl + "/inference";
+            }
+        }
+
+        Log.d(TAG, "Uploading inference data to: " + serverUrl);
+
+        try {
+            okhttp3.MediaType JSON = okhttp3.MediaType.get("application/json; charset=utf-8");
+            okhttp3.RequestBody body = okhttp3.RequestBody.create(inferenceJSON, JSON);
+
+            okhttp3.Request request = new okhttp3.Request.Builder()
+                    .url(serverUrl)
+                    .post(body)
+                    .build();
+
+            // Send request asynchronously
+            httpClient.newCall(request).enqueue(new okhttp3.Callback() {
+                @Override
+                public void onFailure(@NonNull okhttp3.Call call, @NonNull IOException e) {
+                    Log.e(TAG, "Inference upload failed: " + e.getMessage(), e);
+                    if (listener != null) {
+                        listener.onUploadFailure(e.getMessage());
+                    }
+                }
+
+                @Override
+                public void onResponse(@NonNull okhttp3.Call call, @NonNull okhttp3.Response response) throws IOException {
+                    final String responseBody = response.body() != null ? response.body().string() : "";
+                    Log.d(TAG, "Inference response code: " + response.code());
+                    Log.d(TAG, "Inference response body: " + responseBody);
+
+                    if (response.isSuccessful()) {
+                        if (listener != null) {
+                            listener.onUploadSuccess(responseBody);
+                        }
+                    } else {
+                        if (listener != null) {
+                            listener.onUploadFailure("Server error: " + response.code());
+                        }
+                    }
+                }
+            });
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error creating inference request: " + e.getMessage(), e);
+            if (listener != null) {
+                listener.onUploadFailure(e.getMessage());
+            }
+        }
+    }
 
 }

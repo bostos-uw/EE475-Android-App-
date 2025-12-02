@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.bluetooth.BluetoothAdapter;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
@@ -14,18 +15,24 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.ProgressBar;
 import android.widget.TextView;
+import android.widget.EditText;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.appcompat.widget.SwitchCompat;
+import androidx.cardview.widget.CardView;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProvider;
 
 import android.widget.ImageView;
+import android.widget.Toast;
+
 import androidx.constraintlayout.widget.ConstraintLayout;
 
 import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.database.DataSnapshot;
 import com.google.firebase.database.DatabaseError;
 import com.google.firebase.database.DatabaseReference;
@@ -36,11 +43,29 @@ import com.google.firebase.database.ValueEventListener;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.util.Map;
+
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.os.Build;
+import androidx.core.app.ActivityCompat;
+import androidx.core.app.NotificationCompat;
+import androidx.core.app.NotificationManagerCompat;
+import androidx.core.content.ContextCompat;
+import android.Manifest;
+
+
+
+import okhttp3.OkHttpClient;
+
 
 public class HomeFragment extends Fragment {
 
     private static final String TAG = "HomeFragment";
-
     private TextView dailyGoalValue;
     private TextView dailyGoalMinutes;
     private TextView dailyGoalPercentage;
@@ -56,6 +81,7 @@ public class HomeFragment extends Fragment {
     private TextView statusText;
     private TextView statusSuggestion;
 
+
     private BluetoothViewModel bluetoothViewModel;
     private SharedViewModel sharedViewModel;
 
@@ -66,6 +92,21 @@ public class HomeFragment extends Fragment {
     private float currentActiveTime = 0f;
     private int currentDailyGoal = 480; // Default 480 minutes (8 hours)
     private double currentSlouchPercentage = 0.0;
+
+    private EditText homeServerUrlInput;
+    private SwitchCompat mlInferenceSwitch;
+    private OkHttpClient httpClient;
+    private static final String PREFS_NAME = "MLInferencePrefs";
+    private static final String PREF_SERVER_URL = "server_url";
+    private static final String PREF_ML_ENABLED = "ml_inference_enabled";
+
+    // ===== Slouch Notification System =====
+    private static final String CHANNEL_ID = "posture_alerts";
+    private static final int NOTIFICATION_ID = 1001;
+    private static final int NOTIFICATION_PERMISSION_REQUEST_CODE = 100;
+    private int consecutiveSlouchCount = 0;  // Track consecutive slouching sessions
+
+
 
     private final ActivityResultLauncher<String[]> requestPermissionLauncher = registerForActivityResult(
             new ActivityResultContracts.RequestMultiplePermissions(),
@@ -101,6 +142,7 @@ public class HomeFragment extends Fragment {
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
 
+
         // Initialize views
         dailyGoalValue = view.findViewById(R.id.daily_goal_value);
         dailyGoalMinutes = view.findViewById(R.id.daily_goal_minutes);
@@ -116,6 +158,42 @@ public class HomeFragment extends Fragment {
         statusIcon = view.findViewById(R.id.status_icon);
         statusText = view.findViewById(R.id.status_text);
         statusSuggestion = view.findViewById(R.id.status_suggestion);
+
+        // http request init
+        homeServerUrlInput = view.findViewById(R.id.home_server_url_input);
+        mlInferenceSwitch = view.findViewById(R.id.ml_inference_switch);
+        httpClient = new OkHttpClient();
+        loadMLInferencePreferences();
+
+        // Save preferences when URL changes
+        homeServerUrlInput.addTextChangedListener(new android.text.TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {}
+
+            @Override
+            public void afterTextChanged(android.text.Editable s) {
+                // Save URL whenever user types
+                saveServerURL(s.toString());
+            }
+        });
+
+        // Save ML enabled state when switch changes
+        mlInferenceSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            saveMLInferenceEnabled(isChecked);
+
+            if (isChecked) {
+                String url = homeServerUrlInput.getText().toString().trim();
+                if (url.isEmpty()) {
+                    Toast.makeText(getContext(),
+                            "⚠️ Please enter server URL first",
+                            Toast.LENGTH_SHORT).show();
+                    mlInferenceSwitch.setChecked(false);
+                }
+            }
+        });
 
         // Use SharedViewModel to observe goal changes
         sharedViewModel = new ViewModelProvider(requireActivity()).get(SharedViewModel.class);
@@ -144,16 +222,27 @@ public class HomeFragment extends Fragment {
             }
         });
 
-        // ===== NEW: Observe cycle completion to trigger analysis =====
+        // ===== Observe cycle completion to trigger analysis AND ML inference =====
         bluetoothViewModel.getIsCycleComplete().observe(getViewLifecycleOwner(), isComplete -> {
             if (isComplete != null && isComplete) {
                 Log.d(TAG, "Cycle completed! Triggering auto-analysis...");
-                // Small delay to ensure session is saved to Firebase
+
+                // ✅ STEP 1: Run PostureAnalyzer immediately (calibration-based detection)
                 new android.os.Handler().postDelayed(() -> {
                     if (isAdded()) {
                         runAnalysisAndUpdateStatus();
+
+                        // ✅ STEP 2: Wait for analysis to complete, THEN send ML inference
+                        // This ensures PostureAnalyzer finishes first
+                        if (mlInferenceSwitch.isChecked()) {
+                            new android.os.Handler().postDelayed(() -> {
+                                if (isAdded()) {
+                                    sendInferenceToMLServer();
+                                }
+                            }, 2000);  // Wait 2 seconds after analysis starts
+                        }
                     }
-                }, 1500);
+                }, 1500);  // Initial delay for Firebase to save
             }
         });
 
@@ -162,6 +251,16 @@ public class HomeFragment extends Fragment {
 
         // Set up real-time status listener
         setupRealtimeStatusListener();
+
+        // ✅ Create notification channel for posture alerts
+        createNotificationChannel();
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (!hasNotificationPermission()) {
+                Log.d(TAG, "Requesting notification permission...");
+                requestNotificationPermission();
+            }
+        }
     }
 
     /**
@@ -227,27 +326,96 @@ public class HomeFragment extends Fragment {
     }
 
     /**
-     * NEW: Run analysis and the status will auto-update via the listener
+     * Run PostureAnalyzer and track consecutive slouching for notifications
      */
     private void runAnalysisAndUpdateStatus() {
-        Log.d(TAG, "Running analysis after cycle completion...");
+        String userId = FirebaseAuth.getInstance().getCurrentUser().getUid();
 
+        if (userId == null) {
+            Log.w(TAG, "Cannot run analysis - user not authenticated");
+            return;
+        }
+
+        // ✅ Run PostureAnalyzer with callback (no userId parameter needed)
         PostureAnalyzer analyzer = new PostureAnalyzer();
         analyzer.analyzeUnprocessedSessions(new PostureAnalyzer.OnAnalysisCompleteListener() {
             @Override
-            public void onAnalysisComplete(int sessionsAnalyzed, int slouchingSessions) {
-                Log.d(TAG, "Analysis complete: " + sessionsAnalyzed + " sessions, " +
-                        slouchingSessions + " slouching");
-                // Status card will auto-update via the Firebase listener!
-                // No manual update needed here
+            public void onAnalysisComplete(int slouchingCount, int uprightCount) {
+                if (!isAdded()) return;
+
+                Log.d(TAG, "Analysis complete. Slouching: " + slouchingCount + ", Upright: " + uprightCount);
+
+                // ✅ Now check the most recent session for notification tracking
+                DatabaseReference sessionsRef = FirebaseDatabase.getInstance()
+                        .getReference("posture_sessions")
+                        .child(userId);
+
+                sessionsRef.orderByChild("timestamp").limitToLast(1)
+                        .addListenerForSingleValueEvent(new ValueEventListener() {
+                            @Override
+                            public void onDataChange(@NonNull DataSnapshot snapshot) {
+                                if (!isAdded() || !snapshot.exists()) {
+                                    Log.w(TAG, "No sessions found for notification check");
+                                    return;
+                                }
+
+                                for (DataSnapshot sessionSnapshot : snapshot.getChildren()) {
+                                    Boolean isSlouchingNow = sessionSnapshot.child("slouching").getValue(Boolean.class);
+                                    String sessionId = sessionSnapshot.getKey();
+
+                                    if (isSlouchingNow == null) {
+                                        Log.w(TAG, "No slouching status for session: " + sessionId);
+                                        return;
+                                    }
+
+                                    Log.d(TAG, "Session " + sessionId + " → Slouching: " + isSlouchingNow);
+
+                                    // ✅ Track consecutive slouching for notifications
+                                    if (isSlouchingNow) {
+                                        consecutiveSlouchCount++;
+                                        Log.d(TAG, "Consecutive slouch count: " + consecutiveSlouchCount);
+
+                                        // ✅ Send notification after 2 consecutive slouching sessions
+                                        if (consecutiveSlouchCount == 2) {
+                                            Log.d(TAG, "🔔 Triggering slouch notification (2 consecutive sessions)");
+                                            sendSlouchNotification();
+
+                                            // Optional: Reset counter after notification
+                                            // consecutiveSlouchCount = 0;  // Uncomment to send notification every 2 sessions
+                                        }
+
+                                    } else {
+                                        // ✅ Reset counter when posture is upright
+                                        if (consecutiveSlouchCount > 0) {
+                                            Log.d(TAG, "Posture corrected! Resetting slouch counter (was: " + consecutiveSlouchCount + ")");
+                                        }
+                                        consecutiveSlouchCount = 0;
+                                    }
+
+                                    // ✅ NOTE: Status card will update automatically via setupRealtimeStatusListener()
+                                    // No need to manually update UI here!
+                                }
+                            }
+
+                            @Override
+                            public void onCancelled(@NonNull DatabaseError error) {
+                                Log.e(TAG, "Error reading session for notification check: " + error.getMessage());
+                            }
+                        });
             }
 
             @Override
             public void onAnalysisError(String error) {
+                if (!isAdded()) return;
                 Log.e(TAG, "Analysis error: " + error);
+
+                requireActivity().runOnUiThread(() -> {
+                    Toast.makeText(requireContext(), "Analysis error: " + error, Toast.LENGTH_SHORT).show();
+                });
             }
         });
     }
+
 
     /**
      * Update the status card UI based on slouching state
@@ -294,6 +462,67 @@ public class HomeFragment extends Fragment {
             statusSuggestion.setTextColor(ContextCompat.getColor(requireContext(), R.color.white));
             Log.d(TAG, "Status card: Good Posture (green)");
         }
+    }
+
+    /**
+     * Send current posture data to ML server for inference
+     */
+    private void sendInferenceToMLServer() {
+        String serverUrl = homeServerUrlInput.getText().toString().trim();
+
+        if (serverUrl.isEmpty()) {
+            Log.d(TAG, "ML inference disabled - no server URL");
+            return;
+        }
+
+        Log.d(TAG, "Generating inference JSON...");
+
+        // Generate inference JSON from current session
+        bluetoothViewModel.generateInferenceJSON(new BluetoothViewModel.OnInferenceJSONGeneratedListener() {
+            @Override
+            public void onJSONGenerated(String json) {
+                Log.d(TAG, "Inference JSON generated, uploading to server...");
+
+                // Upload to server
+                bluetoothViewModel.uploadInferenceData(serverUrl, json,
+                        new BluetoothViewModel.OnInferenceUploadListener() {
+                            @Override
+                            public void onUploadSuccess(String response) {
+                                Log.d(TAG, "✅ ML Inference successful: " + response);
+
+                                if (isAdded() && getActivity() != null) {
+                                    getActivity().runOnUiThread(() -> {
+                                        // TODO: Parse response and update second status card
+                                        Toast.makeText(getContext(),
+                                                "ML Classification: " + response,
+                                                Toast.LENGTH_SHORT).show();
+                                    });
+                                }
+
+                                // ✅ DONE: Session can be reset now (happens automatically on next connect)
+                                Log.d(TAG, "ML inference upload complete");
+                            }
+
+                            @Override
+                            public void onUploadFailure(String error) {
+                                Log.e(TAG, "❌ ML Inference failed: " + error);
+
+                                if (isAdded() && getActivity() != null) {
+                                    getActivity().runOnUiThread(() -> {
+                                        Toast.makeText(getContext(),
+                                                "ML inference failed: " + error,
+                                                Toast.LENGTH_SHORT).show();
+                                    });
+                                }
+                            }
+                        });
+            }
+
+            @Override
+            public void onError(String error) {
+                Log.e(TAG, "Failed to generate inference JSON: " + error);
+            }
+        });
     }
 
     private void updateButtonState(String status) {
@@ -484,4 +713,172 @@ public class HomeFragment extends Fragment {
             bluetoothViewModel.startCycle();
         }
     }
+
+    /**
+     * Load saved ML inference preferences (server URL and enabled state)
+     */
+    private void loadMLInferencePreferences() {
+        if (getContext() == null) return;
+
+        android.content.SharedPreferences prefs = getContext().getSharedPreferences(
+                PREFS_NAME,
+                android.content.Context.MODE_PRIVATE
+        );
+
+        // Load server URL (default to your ngrok URL)
+        String savedUrl = prefs.getString(
+                PREF_SERVER_URL,
+                "shocking-hatlike-leonila.ngrok-free.dev"  // ✅ Default URL
+        );
+        homeServerUrlInput.setText(savedUrl);
+
+        // Load ML enabled state (default to false for safety)
+        boolean mlEnabled = prefs.getBoolean(PREF_ML_ENABLED, false);
+        mlInferenceSwitch.setChecked(mlEnabled);
+
+        Log.d(TAG, "Loaded ML preferences - URL: " + savedUrl + ", Enabled: " + mlEnabled);
+    }
+
+    /**
+     * Save server URL to SharedPreferences
+     */
+    private void saveServerURL(String url) {
+        if (getContext() == null) return;
+
+        android.content.SharedPreferences.Editor editor = getContext()
+                .getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+                .edit();
+
+        editor.putString(PREF_SERVER_URL, url);
+        editor.apply();  // Use apply() for async save
+
+        Log.d(TAG, "Saved server URL: " + url);
+    }
+
+    /**
+     * Save ML inference enabled state to SharedPreferences
+     */
+    private void saveMLInferenceEnabled(boolean enabled) {
+        if (getContext() == null) return;
+
+        android.content.SharedPreferences.Editor editor = getContext()
+                .getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+                .edit();
+
+        editor.putBoolean(PREF_ML_ENABLED, enabled);
+        editor.apply();
+
+        Log.d(TAG, "Saved ML inference enabled: " + enabled);
+    }
+
+    /**
+     * Create notification channel (required for Android 8.0+)
+     */
+    private void createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            CharSequence name = "Posture Alerts";
+            String description = "Notifications for slouching detection";
+            int importance = NotificationManager.IMPORTANCE_HIGH;  // High priority for heads-up notification
+
+            NotificationChannel channel = new NotificationChannel(CHANNEL_ID, name, importance);
+            channel.setDescription(description);
+            channel.enableVibration(true);
+            channel.setVibrationPattern(new long[]{0, 500, 200, 500});  // Vibration pattern
+
+            NotificationManager notificationManager = requireContext().getSystemService(NotificationManager.class);
+            if (notificationManager != null) {
+                notificationManager.createNotificationChannel(channel);
+                Log.d(TAG, "✓ Notification channel created");
+            }
+        }
+    }
+    /**
+     * Check if notification permission is granted (Android 13+)
+     */
+    private boolean hasNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            return ContextCompat.checkSelfPermission(requireContext(),
+                    Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
+        }
+        return true;  // Pre-Android 13 doesn't need runtime permission
+    }
+
+    /**
+     * Request notification permission (Android 13+)
+     */
+    private void requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (!hasNotificationPermission()) {
+                ActivityCompat.requestPermissions(requireActivity(),
+                        new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                        NOTIFICATION_PERMISSION_REQUEST_CODE);
+            }
+        }
+    }
+
+    /**
+     * Handle permission request result
+     */
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
+        if (requestCode == NOTIFICATION_PERMISSION_REQUEST_CODE) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                Log.d(TAG, "✓ Notification permission granted");
+                Toast.makeText(requireContext(), "Slouch notifications enabled", Toast.LENGTH_SHORT).show();
+            } else {
+                Log.w(TAG, "✗ Notification permission denied");
+                Toast.makeText(requireContext(), "Notification permission denied. You won't receive slouch alerts.", Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+    /**
+     * Send push notification for slouching alert
+     */
+    private void sendSlouchNotification() {
+        // Check permission first
+        if (!hasNotificationPermission()) {
+            Log.w(TAG, "Cannot send notification - permission not granted");
+            requestNotificationPermission();  // Ask for permission
+            return;
+        }
+
+        try {
+            // Create intent to open app when notification is tapped
+            Intent intent = new Intent(requireContext(), MainActivity.class);
+            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+
+            PendingIntent pendingIntent = PendingIntent.getActivity(
+                    requireContext(),
+                    0,
+                    intent,
+                    PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT
+            );
+
+            // Build notification
+            NotificationCompat.Builder builder = new NotificationCompat.Builder(requireContext(), CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.ic_dialog_alert)  // System alert icon
+                    .setContentTitle("⚠️ Posture Alert")
+                    .setContentText("You've been slouching! Time to sit up straight.")
+                    .setStyle(new NotificationCompat.BigTextStyle()
+                            .bigText("You've been slouching for 2 consecutive sessions. Take a moment to adjust your posture and stretch!"))
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setCategory(NotificationCompat.CATEGORY_REMINDER)
+                    .setAutoCancel(true)  // Dismiss when tapped
+                    .setContentIntent(pendingIntent)
+                    .setVibrate(new long[]{0, 500, 200, 500});  // Vibration pattern
+
+            // Send notification
+            NotificationManagerCompat notificationManager = NotificationManagerCompat.from(requireContext());
+            notificationManager.notify(NOTIFICATION_ID, builder.build());
+
+            Log.d(TAG, "✅ Slouch notification sent");
+
+        } catch (SecurityException e) {
+            Log.e(TAG, "Security exception sending notification: " + e.getMessage());
+            requestNotificationPermission();
+        }
+    }
+
 }
