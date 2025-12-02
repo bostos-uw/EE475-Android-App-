@@ -108,6 +108,8 @@ public class BluetoothViewModel extends AndroidViewModel {
     private long inferenceUpperBackStartTime = 0;
     private long inferenceLowerBackStartTime = 0;
 
+    private boolean isMLInferenceEnabled = false;
+
     public BluetoothViewModel(@NonNull Application application) {
         super(application);
         BluetoothManager bluetoothManager = (BluetoothManager) application.getSystemService(Context.BLUETOOTH_SERVICE);
@@ -329,9 +331,12 @@ public class BluetoothViewModel extends AndroidViewModel {
             String deviceName = gatt.getDevice().getName();
 
             if (newState == BluetoothGatt.STATE_CONNECTED) {
-                // ✅ ONLY create new session if we don't have one
-                if (currentSessionId == null && sessionsRef != null) {
-                    currentSessionId = generateSessionId();
+                // ✅ CREATE NEW SESSION at the START of a cycle (when upper back connects)
+                if (isCycling && currentDeviceIndex == 0 && sessionsRef != null) {
+                    // This is upper back connecting - start of a new cycle
+
+                    String oldSessionId = currentSessionId;  // Save old session ID for logging
+                    currentSessionId = generateSessionId();  // Create NEW session
                     sessionStartTime = System.currentTimeMillis();
 
                     PostureSession session = new PostureSession(
@@ -339,9 +344,16 @@ public class BluetoothViewModel extends AndroidViewModel {
                             FirebaseAuth.getInstance().getCurrentUser().getUid(),
                             sessionStartTime
                     );
+
                     sessionsRef.child(currentSessionId).setValue(session)
-                            .addOnSuccessListener(aVoid ->
-                                    Log.d(TAG, "✓ New session created: " + currentSessionId))
+                            .addOnSuccessListener(aVoid -> {
+                                Log.d(TAG, "════════════════════════════════════════");
+                                Log.d(TAG, "✓ NEW SESSION CREATED: " + currentSessionId);
+                                if (oldSessionId != null) {
+                                    Log.d(TAG, "  Previous session: " + oldSessionId + " (being analyzed)");
+                                }
+                                Log.d(TAG, "════════════════════════════════════════");
+                            })
                             .addOnFailureListener(e ->
                                     Log.e(TAG, "✗ Failed to create session: " + e.getMessage()));
 
@@ -351,7 +363,7 @@ public class BluetoothViewModel extends AndroidViewModel {
                     inferenceUpperBackStartTime = 0;
                     inferenceLowerBackStartTime = 0;
 
-                    Log.d(TAG, "New cycle started - Session: " + currentSessionId);
+                    Log.d(TAG, "New cycle started - Upper back connecting");
                 }
 
                 connectionStatus.postValue("Connected to " + deviceName);
@@ -383,35 +395,58 @@ public class BluetoothViewModel extends AndroidViewModel {
                     currentDeviceIndex = (currentDeviceIndex + 1) % deviceNames.length;
 
                     if (currentDeviceIndex == 0) {
-                        // ✅ CYCLE COMPLETE - PostureAnalyzer will use the LAST saved upperBack/lowerBack
+                        // ✅ CYCLE COMPLETE
+                        Log.d(TAG, "════════════════════════════════════════");
                         Log.d(TAG, "✓ Session cycle complete: " + currentSessionId);
+                        Log.d(TAG, "  Upper back samples: " + inferenceUpperBackBuffer.size());
+                        Log.d(TAG, "  Lower back samples: " + inferenceLowerBackBuffer.size());
+                        Log.d(TAG, "════════════════════════════════════════");
 
-                        // ✅ Save inference arrays for ML (separate from PostureAnalyzer data)
+                        // Save inference arrays (conditional on ML switch)
                         saveInferenceDataToFirebase();
 
-                        // ✅ Reset session for next cycle
-                        currentSessionId = null;
+                        // ✅ DON'T RESET SESSION YET - PostureAnalyzer needs it!
+                        // We'll create a new session when upper back connects
 
-                        // ✅ Trigger UI update (PostureAnalyzer will run)
+                        // Trigger UI update (PostureAnalyzer will analyze current session)
                         isCycleComplete.postValue(true);
-                    }
 
-                    handler.postDelayed(() -> scanForNextDevice(), 1000);
+                        // ✅ START NEW CYCLE after 1 second
+                        handler.postDelayed(() -> {
+                            if (isCycling) {
+                                scanForNextDevice();
+                            }
+                        }, 1000);  // Reduced from 2000ms to 1000ms
+
+                    } else {
+                        // NOT complete yet - continue to next device (lower back)
+                        Log.d(TAG, "Moving to next device: " + deviceNames[currentDeviceIndex]);
+                        handler.postDelayed(() -> scanForNextDevice(), 1000);
+                    }
                 }
             }
         }
 
-        /**
+        /*
          * Save collected inference data arrays to Firebase
-         * ALSO saves legacy single readings for PostureAnalyzer compatibility
-         */
-        /**
-         * Save collected inference data arrays to Firebase
-         * This is SEPARATE from the upperBack/lowerBack used by PostureAnalyzer
+         * ONLY saves if ML inference is enabled - otherwise skips for performance
          */
         private void saveInferenceDataToFirebase() {
             if (currentSessionId == null || sessionsRef == null) {
                 Log.w(TAG, "Cannot save inference data - no session or reference");
+                return;
+            }
+
+            // PERFORMANCE OPTIMIZATION: Skip array saving if ML inference is disabled
+            if (!isMLInferenceEnabled) {
+                Log.d(TAG, "⚡ Skipping array save (ML inference disabled) - performance optimized");
+
+                // Clear buffers to free memory
+                inferenceUpperBackBuffer.clear();
+                inferenceLowerBackBuffer.clear();
+                inferenceUpperBackStartTime = 0;
+                inferenceLowerBackStartTime = 0;
+
                 return;
             }
 
@@ -420,13 +455,13 @@ public class BluetoothViewModel extends AndroidViewModel {
                 return;
             }
 
-            Log.d(TAG, "Saving inference arrays to Firebase:");
+            Log.d(TAG, "💾 Saving inference arrays to Firebase (ML inference enabled):");
             Log.d(TAG, "  Upper back: " + inferenceUpperBackBuffer.size() + " samples");
             Log.d(TAG, "  Lower back: " + inferenceLowerBackBuffer.size() + " samples");
 
             DatabaseReference sessionRef = sessionsRef.child(currentSessionId);
 
-            // ✅ Save ONLY the arrays (PostureAnalyzer doesn't need these)
+            // ✅ Save arrays for ML inference
             sessionRef.child("upperBackArray").setValue(inferenceUpperBackBuffer)
                     .addOnSuccessListener(aVoid -> {
                         Log.d(TAG, "✓ Upper back array saved (for ML inference)");
@@ -941,5 +976,13 @@ public class BluetoothViewModel extends AndroidViewModel {
         }
     }
 
+    /**
+     * Set whether ML inference is currently enabled
+     * This controls whether we save arrays to Firebase
+     */
+    public void setMLInferenceEnabled(boolean enabled) {
+        this.isMLInferenceEnabled = enabled;
+        Log.d(TAG, "ML inference mode: " + (enabled ? "ENABLED" : "DISABLED"));
+    }
 
 }

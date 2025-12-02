@@ -258,6 +258,9 @@ public class HomeFragment extends Fragment {
             if (isComplete != null && isComplete) {
                 Log.d(TAG, "Cycle completed! Triggering auto-analysis...");
 
+                boolean mlEnabled = isMLInferenceEnabled();
+                bluetoothViewModel.setMLInferenceEnabled(mlEnabled);
+
                 // ✅ STEP 1: Run PostureAnalyzer immediately (calibration-based detection)
                 new android.os.Handler().postDelayed(() -> {
                     if (isAdded()) {
@@ -265,7 +268,7 @@ public class HomeFragment extends Fragment {
 
                         // ✅ STEP 2: Wait for analysis to complete, THEN send ML inference
                         // This ensures PostureAnalyzer finishes first
-                        if (mlInferenceSwitch.isChecked()) {
+                        if (mlEnabled) {
                             new android.os.Handler().postDelayed(() -> {
                                 if (isAdded()) {
                                     sendInferenceToMLServer();
@@ -1041,5 +1044,14 @@ public class HomeFragment extends Fragment {
                     });
         }
     }
+
+    /**
+     * Check if ML inference is currently enabled
+     */
+    private boolean isMLInferenceEnabled() {
+        return mlInferenceSwitch != null && mlInferenceSwitch.isChecked();
+    }
+
+
 
 }
