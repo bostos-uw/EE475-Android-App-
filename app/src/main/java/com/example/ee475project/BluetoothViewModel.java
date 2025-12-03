@@ -877,11 +877,11 @@ public class BluetoothViewModel extends AndroidViewModel {
         }
 
         // Add /inference endpoint if not present
-        if (!serverUrl.endsWith("/inference")) {
+        if (!serverUrl.endsWith("/predict")) {
             if (serverUrl.endsWith("/")) {
-                serverUrl = serverUrl + "inference";
+                serverUrl = serverUrl + "predict";
             } else {
-                serverUrl = serverUrl + "/inference";
+                serverUrl = serverUrl + "/predict";
             }
         }
 

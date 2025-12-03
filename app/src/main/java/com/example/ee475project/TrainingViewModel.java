@@ -69,7 +69,7 @@ public class TrainingViewModel extends AndroidViewModel {
     private static final String DEVICE_NAME_UPPER = "XIAO_Upper_Back";
     private static final String DEVICE_NAME_LOWER = "XIAO_Lower_Back";
     private static final long SCAN_PERIOD = 10000; // 10 seconds
-    private static final long CONNECTION_TIME = 12000; // 2 MINUTES (120 seconds)
+    private static final long CONNECTION_TIME = 120000; // 2 MINUTES (120 seconds)
 
     // Nordic UART Service UUIDs
     private static final UUID UART_SERVICE_UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E");

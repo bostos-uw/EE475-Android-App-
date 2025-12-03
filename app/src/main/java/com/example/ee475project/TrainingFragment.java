@@ -426,7 +426,7 @@ public class TrainingFragment extends Fragment {
 
         // Add /upload endpoint if not present
         if (!serverUrl.endsWith("/train")) {
-            if (serverUrl.endsWith("/")) {
+            if (serverUrl.endsWith("/train")) {
                 serverUrl = serverUrl + "train";
             } else {
                 serverUrl = serverUrl + "/train";
