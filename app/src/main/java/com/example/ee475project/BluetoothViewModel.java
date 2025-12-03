@@ -102,6 +102,9 @@ public class BluetoothViewModel extends AndroidViewModel {
 
     // Firebase Session Tracking
     private String currentSessionId = null;
+
+    private String lastCompletedSessionId = null;
+
     private long sessionStartTime = 0;
     private DatabaseReference sessionsRef;
 
@@ -479,42 +482,37 @@ public class BluetoothViewModel extends AndroidViewModel {
                 return;
             }
 
-            // PERFORMANCE OPTIMIZATION: Skip array saving if ML inference is disabled
-            if (!isMLInferenceEnabled) {
-                Log.d(TAG, "⚡ Skipping array save (ML inference disabled) - performance optimized");
-
-                // Clear buffers to free memory
+            if (inferenceUpperBackBuffer.isEmpty() || inferenceLowerBackBuffer.isEmpty()) {
+                Log.w(TAG, "Cannot save inference data - buffers are empty");
+                // Still clear buffers
                 inferenceUpperBackBuffer.clear();
                 inferenceLowerBackBuffer.clear();
                 inferenceUpperBackStartTime = 0;
                 inferenceLowerBackStartTime = 0;
-
                 return;
             }
 
-            if (inferenceUpperBackBuffer.isEmpty() || inferenceLowerBackBuffer.isEmpty()) {
-                Log.w(TAG, "Cannot save inference data - buffers are empty");
-                return;
-            }
+            lastCompletedSessionId = currentSessionId;
 
-            Log.d(TAG, "💾 Saving inference arrays to Firebase (ML inference enabled):");
+            Log.d(TAG, "💾 Saving inference arrays to Firebase:");
+            Log.d(TAG, "  Session: " + currentSessionId);
             Log.d(TAG, "  Upper back: " + inferenceUpperBackBuffer.size() + " samples");
             Log.d(TAG, "  Lower back: " + inferenceLowerBackBuffer.size() + " samples");
 
             DatabaseReference sessionRef = sessionsRef.child(currentSessionId);
 
-            // ✅ Save arrays for ML inference
-            sessionRef.child("upperBackArray").setValue(inferenceUpperBackBuffer)
+            // ✅ ALWAYS save arrays - ML check happens at upload time
+            sessionRef.child("upperBackArray").setValue(new ArrayList<>(inferenceUpperBackBuffer))
                     .addOnSuccessListener(aVoid -> {
-                        Log.d(TAG, "✓ Upper back array saved (for ML inference)");
+                        Log.d(TAG, "✓ Upper back array saved");
                     })
                     .addOnFailureListener(e -> {
                         Log.e(TAG, "✗ Failed to save upper back array: " + e.getMessage());
                     });
 
-            sessionRef.child("lowerBackArray").setValue(inferenceLowerBackBuffer)
+            sessionRef.child("lowerBackArray").setValue(new ArrayList<>(inferenceLowerBackBuffer))
                     .addOnSuccessListener(aVoid -> {
-                        Log.d(TAG, "✓ Lower back array saved (for ML inference)");
+                        Log.d(TAG, "✓ Lower back array saved");
                     })
                     .addOnFailureListener(e -> {
                         Log.e(TAG, "✗ Failed to save lower back array: " + e.getMessage());
@@ -729,6 +727,10 @@ public class BluetoothViewModel extends AndroidViewModel {
      * Uses the arrays saved during the last cycle
      * Format: { user_id, sample_rate_hz, duration_seconds, sample_count, upper_back[], lower_back[] }
      */
+    /**
+     * Generate inference JSON from the LAST COMPLETED session
+     * Uses lastCompletedSessionId to avoid race condition with new cycles
+     */
     public void generateInferenceJSON(OnInferenceJSONGeneratedListener listener) {
         if (sessionsRef == null) {
             Log.w(TAG, "No sessions reference available");
@@ -738,38 +740,32 @@ public class BluetoothViewModel extends AndroidViewModel {
             return;
         }
 
-        // Get current user ID
+        // ✅ Use the COMPLETED session, not "most recent" (which might be a new empty session)
+        if (lastCompletedSessionId == null) {
+            Log.e(TAG, "No completed session ID available");
+            if (listener != null) {
+                listener.onError("No completed session");
+            }
+            return;
+        }
+
         String userId = FirebaseAuth.getInstance().getCurrentUser() != null ?
                 FirebaseAuth.getInstance().getCurrentUser().getUid() : "unknown_user";
 
-        // ✅ Find the MOST RECENT session with inference arrays
-        sessionsRef.orderByChild("timestamp").limitToLast(1)
+        Log.d(TAG, "Generating inference JSON from completed session: " + lastCompletedSessionId);
+
+        // ✅ Query the SPECIFIC completed session, not "limitToLast(1)"
+        sessionsRef.child(lastCompletedSessionId)
                 .addListenerForSingleValueEvent(new ValueEventListener() {
                     @Override
-                    public void onDataChange(@NonNull DataSnapshot snapshot) {
-                        if (!snapshot.exists() || snapshot.getChildrenCount() == 0) {
-                            Log.e(TAG, "No sessions found in Firebase");
+                    public void onDataChange(@NonNull DataSnapshot sessionSnapshot) {
+                        if (!sessionSnapshot.exists()) {
+                            Log.e(TAG, "Completed session not found: " + lastCompletedSessionId);
                             if (listener != null) {
-                                listener.onError("No sessions found");
+                                listener.onError("Session not found");
                             }
                             return;
                         }
-
-                        // Get the most recent session
-                        DataSnapshot sessionSnapshot = null;
-                        for (DataSnapshot child : snapshot.getChildren()) {
-                            sessionSnapshot = child;  // Will be the last (most recent) one
-                        }
-
-                        if (sessionSnapshot == null) {
-                            if (listener != null) {
-                                listener.onError("No session data");
-                            }
-                            return;
-                        }
-
-                        String sessionId = sessionSnapshot.getKey();
-                        Log.d(TAG, "Generating inference JSON from session: " + sessionId);
 
                         try {
                             // Get arrays from Firebase
@@ -796,9 +792,11 @@ public class BluetoothViewModel extends AndroidViewModel {
                             }
 
                             if (upperBackArray.isEmpty() || lowerBackArray.isEmpty()) {
-                                Log.e(TAG, "No array data found for inference");
+                                Log.e(TAG, "No array data in session: " + lastCompletedSessionId);
+                                Log.e(TAG, "  upperBackArray exists: " + upperArraySnapshot.exists() + ", children: " + upperArraySnapshot.getChildrenCount());
+                                Log.e(TAG, "  lowerBackArray exists: " + lowerArraySnapshot.exists() + ", children: " + lowerArraySnapshot.getChildrenCount());
                                 if (listener != null) {
-                                    listener.onError("No sensor data arrays found");
+                                    listener.onError("No sensor data arrays found in session " + lastCompletedSessionId);
                                 }
                                 return;
                             }
@@ -822,7 +820,7 @@ public class BluetoothViewModel extends AndroidViewModel {
                             json.append("  \"duration_seconds\": ").append(String.format(Locale.US, "%.2f", durationSeconds)).append(",\n");
                             json.append("  \"sample_count\": ").append(sampleCount).append(",\n");
 
-                            // Upper back array (without timestamps)
+                            // Upper back array
                             json.append("  \"upper_back\": [\n");
                             for (int i = 0; i < upperBackArray.size(); i++) {
                                 SensorData reading = upperBackArray.get(i);
@@ -834,14 +832,12 @@ public class BluetoothViewModel extends AndroidViewModel {
                                 json.append("\"gy\": ").append(String.format(Locale.US, "%.4f", reading.gyroY)).append(", ");
                                 json.append("\"gz\": ").append(String.format(Locale.US, "%.4f", reading.gyroZ));
                                 json.append("}");
-                                if (i < upperBackArray.size() - 1) {
-                                    json.append(",");
-                                }
+                                if (i < upperBackArray.size() - 1) json.append(",");
                                 json.append("\n");
                             }
                             json.append("  ],\n");
 
-                            // Lower back array (without timestamps)
+                            // Lower back array
                             json.append("  \"lower_back\": [\n");
                             for (int i = 0; i < lowerBackArray.size(); i++) {
                                 SensorData reading = lowerBackArray.get(i);
@@ -853,20 +849,16 @@ public class BluetoothViewModel extends AndroidViewModel {
                                 json.append("\"gy\": ").append(String.format(Locale.US, "%.4f", reading.gyroY)).append(", ");
                                 json.append("\"gz\": ").append(String.format(Locale.US, "%.4f", reading.gyroZ));
                                 json.append("}");
-                                if (i < lowerBackArray.size() - 1) {
-                                    json.append(",");
-                                }
+                                if (i < lowerBackArray.size() - 1) json.append(",");
                                 json.append("\n");
                             }
                             json.append("  ]\n");
                             json.append("}");
 
-                            Log.d(TAG, "✓ Inference JSON generated:");
-                            Log.d(TAG, "  Session: " + sessionId);
+                            Log.d(TAG, "✓ Inference JSON generated from session: " + lastCompletedSessionId);
                             Log.d(TAG, "  Sample count: " + sampleCount);
                             Log.d(TAG, "  Sample rate: " + String.format(Locale.US, "%.2f", sampleRateHz) + " Hz");
                             Log.d(TAG, "  Duration: " + String.format(Locale.US, "%.2f", durationSeconds) + " seconds");
-                            Log.d(TAG, "  JSON size: " + json.length() + " characters");
 
                             if (listener != null) {
                                 listener.onJSONGenerated(json.toString());
