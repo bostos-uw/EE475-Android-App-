@@ -97,6 +97,9 @@ public class BluetoothViewModel extends AndroidViewModel {
     private boolean hasGyroData = false;
     private String currentSensor = "";  // "UB" or "LB"
 
+    // Add this field near the top with other fields
+    private Runnable scheduledDisconnectRunnable = null;
+
     // Firebase Session Tracking
     private String currentSessionId = null;
     private long sessionStartTime = 0;
@@ -109,6 +112,9 @@ public class BluetoothViewModel extends AndroidViewModel {
     private long inferenceLowerBackStartTime = 0;
 
     private boolean isMLInferenceEnabled = false;
+
+    private boolean isConnecting = false;
+
 
     public BluetoothViewModel(@NonNull Application application) {
         super(application);
@@ -133,9 +139,17 @@ public class BluetoothViewModel extends AndroidViewModel {
             @Override
             public void onScanResult(int callbackType, ScanResult result) {
                 super.onScanResult(callbackType, result);
+
+                // ✅ GUARD: Skip if already connecting or connected
+                if (isConnecting || Boolean.TRUE.equals(isConnected.getValue())) {
+                    return;
+                }
+
                 BluetoothDevice device = result.getDevice();
                 if (device != null && device.getName() != null) {
                     if (isCycling && device.getName().equals(deviceNames[currentDeviceIndex])) {
+                        // ✅ Set connecting flag IMMEDIATELY before anything else
+                        isConnecting = true;
                         handler.removeCallbacks(stopScanRunnable);
                         bluetoothLeScanner.stopScan(leScanCallback);
                         connectToDevice(device);
@@ -259,6 +273,12 @@ public class BluetoothViewModel extends AndroidViewModel {
     private void scanForNextDevice() {
         if (!isCycling) return;
 
+        // ✅ GUARD: Don't scan if already connecting or connected
+        if (isConnecting) {
+            Log.w(TAG, "scanForNextDevice: Already connecting, skipping");
+            return;
+        }
+
         String deviceName = deviceNames[currentDeviceIndex];
         List<ScanFilter> filters = new ArrayList<>();
         filters.add(new ScanFilter.Builder().setDeviceName(deviceName).build());
@@ -325,18 +345,23 @@ public class BluetoothViewModel extends AndroidViewModel {
     };
 
 
+    // Replace your onConnectionStateChange method:
     private final BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
         @Override
         public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
             String deviceName = gatt.getDevice().getName();
 
             if (newState == BluetoothGatt.STATE_CONNECTED) {
+                // ✅ CANCEL any pending disconnect from previous connection
+                if (scheduledDisconnectRunnable != null) {
+                    handler.removeCallbacks(scheduledDisconnectRunnable);
+                    scheduledDisconnectRunnable = null;
+                }
+
                 // ✅ CREATE NEW SESSION at the START of a cycle (when upper back connects)
                 if (isCycling && currentDeviceIndex == 0 && sessionsRef != null) {
-                    // This is upper back connecting - start of a new cycle
-
-                    String oldSessionId = currentSessionId;  // Save old session ID for logging
-                    currentSessionId = generateSessionId();  // Create NEW session
+                    String oldSessionId = currentSessionId;
+                    currentSessionId = generateSessionId();
                     sessionStartTime = System.currentTimeMillis();
 
                     PostureSession session = new PostureSession(
@@ -347,27 +372,25 @@ public class BluetoothViewModel extends AndroidViewModel {
 
                     sessionsRef.child(currentSessionId).setValue(session)
                             .addOnSuccessListener(aVoid -> {
-                                Log.d(TAG, "════════════════════════════════════════");
                                 Log.d(TAG, "✓ NEW SESSION CREATED: " + currentSessionId);
-                                if (oldSessionId != null) {
-                                    Log.d(TAG, "  Previous session: " + oldSessionId + " (being analyzed)");
-                                }
-                                Log.d(TAG, "════════════════════════════════════════");
                             })
                             .addOnFailureListener(e ->
                                     Log.e(TAG, "✗ Failed to create session: " + e.getMessage()));
 
-                    // ✅ Clear inference buffers for new session
+                    // Clear inference buffers for new session
                     inferenceUpperBackBuffer.clear();
                     inferenceLowerBackBuffer.clear();
                     inferenceUpperBackStartTime = 0;
                     inferenceLowerBackStartTime = 0;
 
-                    Log.d(TAG, "New cycle started - Upper back connecting");
+                    Log.d(TAG, "Cycle started - Upper back connecting (index=0)");
+                } else if (isCycling && currentDeviceIndex == 1) {
+                    Log.d(TAG, "Cycle continuing - Lower back connecting (index=1)");
                 }
 
                 connectionStatus.postValue("Connected to " + deviceName);
                 isConnected.postValue(true);
+                isConnecting = false;  // ✅ Clear connecting flag - now connected
                 connectionStartTime = System.currentTimeMillis();
                 timerHandler.post(timerRunnable);
 
@@ -375,16 +398,32 @@ public class BluetoothViewModel extends AndroidViewModel {
                 gatt.discoverServices();
 
                 if (isCycling) {
-                    handler.postDelayed(() -> gatt.disconnect(), CONNECTION_TIME);
+                    // ✅ Store the runnable so we can cancel it later
+                    final BluetoothGatt gattToDisconnect = gatt;
+                    scheduledDisconnectRunnable = () -> {
+                        Log.d(TAG, "Scheduled disconnect firing for: " + deviceName);
+                        if (gattToDisconnect != null && gattToDisconnect == bluetoothGatt) {
+                            gattToDisconnect.disconnect();
+                        }
+                    };
+                    handler.postDelayed(scheduledDisconnectRunnable, CONNECTION_TIME);
+                    Log.d(TAG, "Scheduled disconnect in " + CONNECTION_TIME + "ms for: " + deviceName);
                 }
 
             } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
+                // ✅ CANCEL scheduled disconnect (it already happened or we're handling unexpected disconnect)
+                if (scheduledDisconnectRunnable != null) {
+                    handler.removeCallbacks(scheduledDisconnectRunnable);
+                    scheduledDisconnectRunnable = null;
+                }
+
                 timerHandler.removeCallbacks(timerRunnable);
                 synchronized (dataBuffer) {
                     dataBuffer.setLength(0);
                 }
                 connectionStatus.postValue("Disconnected from " + deviceName);
                 isConnected.postValue(false);
+                isConnecting = false;  // ✅ Clear connecting flag
                 gatt.close();
 
                 if (bluetoothGatt == gatt) {
@@ -392,36 +431,39 @@ public class BluetoothViewModel extends AndroidViewModel {
                 }
 
                 if (isCycling) {
+                    int previousIndex = currentDeviceIndex;
                     currentDeviceIndex = (currentDeviceIndex + 1) % deviceNames.length;
 
+                    Log.d(TAG, "Cycling: index " + previousIndex + " → " + currentDeviceIndex +
+                            " (disconnected from " + deviceName + ")");
+
                     if (currentDeviceIndex == 0) {
-                        // ✅ CYCLE COMPLETE
+                        // ✅ CYCLE COMPLETE - both sensors collected
                         Log.d(TAG, "════════════════════════════════════════");
-                        Log.d(TAG, "✓ Session cycle complete: " + currentSessionId);
-                        Log.d(TAG, "  Upper back samples: " + inferenceUpperBackBuffer.size());
-                        Log.d(TAG, "  Lower back samples: " + inferenceLowerBackBuffer.size());
+                        Log.d(TAG, "✓ CYCLE COMPLETE: " + currentSessionId);
+                        Log.d(TAG, "  Upper samples: " + inferenceUpperBackBuffer.size());
+                        Log.d(TAG, "  Lower samples: " + inferenceLowerBackBuffer.size());
                         Log.d(TAG, "════════════════════════════════════════");
 
-                        // Save inference arrays (conditional on ML switch)
                         saveInferenceDataToFirebase();
-
-                        // ✅ DON'T RESET SESSION YET - PostureAnalyzer needs it!
-                        // We'll create a new session when upper back connects
-
-                        // Trigger UI update (PostureAnalyzer will analyze current session)
                         isCycleComplete.postValue(true);
 
-                        // ✅ START NEW CYCLE after 1 second
+                        // Start next cycle after delay
+                        handler.postDelayed(() -> {
+                            if (isCycling) {
+                                Log.d(TAG, "Starting new cycle - scanning for Upper Back");
+                                scanForNextDevice();
+                            }
+                        }, 1500);
+
+                    } else {
+                        // Continue to next device (Lower Back)
+                        Log.d(TAG, "Continuing cycle - scanning for: " + deviceNames[currentDeviceIndex]);
                         handler.postDelayed(() -> {
                             if (isCycling) {
                                 scanForNextDevice();
                             }
-                        }, 1000);  // Reduced from 2000ms to 1000ms
-
-                    } else {
-                        // NOT complete yet - continue to next device (lower back)
-                        Log.d(TAG, "Moving to next device: " + deviceNames[currentDeviceIndex]);
-                        handler.postDelayed(() -> scanForNextDevice(), 1000);
+                        }, 1500);
                     }
                 }
             }

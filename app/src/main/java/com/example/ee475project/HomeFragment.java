@@ -120,6 +120,10 @@ public class HomeFragment extends Fragment {
     private static final String BATTERY_PREFS = "BatteryEstimation";
     private static final String PREF_LAST_NOON_RESET = "last_noon_reset";
 
+    private static final String CLEANUP_PREFS = "SessionCleanup";
+    private static final String PREF_LAST_CLEANUP = "last_cleanup_timestamp";
+    private static final long CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
 
 
     private final ActivityResultLauncher<String[]> requestPermissionLauncher = registerForActivityResult(
@@ -184,6 +188,8 @@ public class HomeFragment extends Fragment {
         lowerBatteryText = view.findViewById(R.id.lower_back_battery_percentage);
         upperBatteryIcon = view.findViewById(R.id.upper_back_battery_icon);
         lowerBatteryIcon = view.findViewById(R.id.lower_back_battery_icon);
+
+        checkAndRunCleanup();
 
 
         // Save preferences when URL changes
@@ -361,7 +367,8 @@ public class HomeFragment extends Fragment {
     }
 
     /**
-     * Run PostureAnalyzer and track consecutive slouching for notifications
+     * Run PostureAnalyzer and update status - OPTIMIZED
+     * Uses analysis result directly instead of re-querying Firebase
      */
     private void runAnalysisAndUpdateStatus() {
         String userId = FirebaseAuth.getInstance().getCurrentUser().getUid();
@@ -371,85 +378,56 @@ public class HomeFragment extends Fragment {
             return;
         }
 
-        // ✅ Run PostureAnalyzer with callback
         PostureAnalyzer analyzer = new PostureAnalyzer();
         analyzer.analyzeUnprocessedSessions(new PostureAnalyzer.OnAnalysisCompleteListener() {
             @Override
             public void onAnalysisComplete(int sessionsAnalyzed, int slouchingSessions) {
                 if (!isAdded()) return;
 
-                Log.d(TAG, "Analysis complete. Slouching: " + slouchingSessions + ", Upright: " + (sessionsAnalyzed - slouchingSessions));
+                Log.d(TAG, "Analysis complete: " + sessionsAnalyzed + " sessions, " +
+                        slouchingSessions + " slouching");
 
-                // ✅ CRITICAL FIX: Send slouch indicator if slouching detected
-                if (slouchingSessions > 0) {
-                    Log.d(TAG, "Slouching detected! Sending LED indicator command...");
-                    sendSlouchIndicatorIfNeeded();  // ← THIS IS THE FIX
+                // Skip if no sessions were analyzed (all were incomplete)
+                if (sessionsAnalyzed == 0) {
+                    Log.d(TAG, "No complete sessions to analyze");
+                    return;
                 }
 
-                // ✅ Check most recent session for notification tracking
-                DatabaseReference sessionsRef = FirebaseDatabase.getInstance()
-                        .getReference("posture_sessions")
-                        .child(userId);
+                // ✅ Use result directly - no Firebase re-query needed!
+                boolean isSlouchingNow = slouchingSessions > 0;
 
-                sessionsRef.orderByChild("timestamp").limitToLast(1)
-                        .addListenerForSingleValueEvent(new ValueEventListener() {
-                            @Override
-                            public void onDataChange(@NonNull DataSnapshot snapshot) {
-                                if (!isAdded() || !snapshot.exists()) {
-                                    Log.w(TAG, "No sessions found for notification check");
-                                    return;
-                                }
+                // Update status card immediately
+                updateStatusCard(isSlouchingNow);
 
-                                for (DataSnapshot sessionSnapshot : snapshot.getChildren()) {
-                                    Boolean isSlouchingNow = sessionSnapshot.child("slouching").getValue(Boolean.class);
-                                    String sessionId = sessionSnapshot.getKey();
+                // Send LED indicator if slouching
+                if (isSlouchingNow) {
+                    sendSlouchIndicatorIfNeeded();
+                }
 
-                                    if (isSlouchingNow == null) {
-                                        Log.w(TAG, "No slouching status for session: " + sessionId);
-                                        return;
-                                    }
+                // Track consecutive slouching for notifications
+                if (isSlouchingNow) {
+                    consecutiveSlouchCount++;
+                    Log.d(TAG, "Consecutive slouch count: " + consecutiveSlouchCount);
 
-                                    Log.d(TAG, "Session " + sessionId + " → Slouching: " + isSlouchingNow);
-
-                                    // Track consecutive slouching for notifications
-                                    if (isSlouchingNow) {
-                                        consecutiveSlouchCount++;
-                                        Log.d(TAG, "Consecutive slouch count: " + consecutiveSlouchCount);
-
-                                        // Send notification after 2 consecutive slouching sessions
-                                        if (consecutiveSlouchCount == 2) {
-                                            Log.d(TAG, "🔔 Triggering slouch notification (2 consecutive sessions)");
-                                            sendSlouchNotification();
-                                        }
-
-                                    } else {
-                                        // Reset counter when posture is upright
-                                        if (consecutiveSlouchCount > 0) {
-                                            Log.d(TAG, "Posture corrected! Resetting slouch counter (was: " + consecutiveSlouchCount + ")");
-                                        }
-                                        consecutiveSlouchCount = 0;
-                                    }
-                                }
-                            }
-
-                            @Override
-                            public void onCancelled(@NonNull DatabaseError error) {
-                                Log.e(TAG, "Error reading session for notification check: " + error.getMessage());
-                            }
-                        });
+                    if (consecutiveSlouchCount == 1) {
+                        sendSlouchNotification();
+                    }
+                } else {
+                    if (consecutiveSlouchCount > 0) {
+                        Log.d(TAG, "Posture corrected! Resetting counter");
+                    }
+                    consecutiveSlouchCount = 0;
+                }
             }
 
             @Override
             public void onAnalysisError(String error) {
                 if (!isAdded()) return;
                 Log.e(TAG, "Analysis error: " + error);
-
-                requireActivity().runOnUiThread(() -> {
-                    Toast.makeText(requireContext(), "Analysis error: " + error, Toast.LENGTH_SHORT).show();
-                });
             }
         });
     }
+
 
     /**
      * Send slouch indicator command to Upper Back device to turn on red LED
@@ -1052,6 +1030,33 @@ public class HomeFragment extends Fragment {
         return mlInferenceSwitch != null && mlInferenceSwitch.isChecked();
     }
 
+    private void checkAndRunCleanup() {
+        if (getContext() == null) return;
 
+        android.content.SharedPreferences prefs = getContext().getSharedPreferences(
+                CLEANUP_PREFS, android.content.Context.MODE_PRIVATE);
+        long lastCleanup = prefs.getLong(PREF_LAST_CLEANUP, 0);
+        long currentTime = System.currentTimeMillis();
+
+        if (currentTime - lastCleanup > CLEANUP_INTERVAL_MS) {
+            Log.d(TAG, "Running session cleanup...");
+
+            PostureAnalyzer analyzer = new PostureAnalyzer();
+            analyzer.cleanupIncompleteSessions(new PostureAnalyzer.OnCleanupCompleteListener() {
+                @Override
+                public void onCleanupComplete(int deletedCount) {
+                    Log.d(TAG, "✓ Cleaned up " + deletedCount + " incomplete sessions");
+                    if (getContext() != null) {
+                        prefs.edit().putLong(PREF_LAST_CLEANUP, System.currentTimeMillis()).apply();
+                    }
+                }
+
+                @Override
+                public void onCleanupError(String error) {
+                    Log.e(TAG, "Cleanup error: " + error);
+                }
+            });
+        }
+    }
 
 }
