@@ -15,6 +15,14 @@ public class PostureSession {
     public Boolean analyzed;  // Has this session been analyzed yet?
     public Boolean slouching; // Result after analysis
 
+    // ===== Analysis result fields (set by PostureAnalyzer) =====
+    public int overallSlouchScore;
+    public float upperBackDeviation;
+    public float lowerBackDeviation;
+    public int upperBackScore;
+    public int lowerBackScore;
+    public long calibrationTimestamp;
+
     // Required empty constructor for Firebase
     public PostureSession() {}
 

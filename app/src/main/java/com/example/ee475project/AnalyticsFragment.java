@@ -20,7 +20,6 @@ import com.github.mikephil.charting.data.BarEntry;
 import com.github.mikephil.charting.data.PieData;
 import com.github.mikephil.charting.data.PieDataSet;
 import com.github.mikephil.charting.data.PieEntry;
-import com.github.mikephil.charting.utils.ColorTemplate;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.database.DataSnapshot;
 import com.google.firebase.database.DatabaseError;
@@ -35,18 +34,29 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 
+/**
+ * ✅ OPTIMIZED AnalyticsFragment
+ *
+ * Key optimizations:
+ * 1. Uses daily_stats instead of loading all posture_sessions (HUGE memory savings)
+ * 2. Calculates minutes from session counts
+ * 3. Cleans up old sessions on entry
+ * 4. Limits all queries
+ */
 public class AnalyticsFragment extends Fragment {
 
     private static final String TAG = "AnalyticsFragment";
     private FragmentAnalyticsBinding binding;
     private PostureAnalyzer postureAnalyzer;
 
-    // Store total connection time for calculations
-    private float totalConnectionTimeHours = 0f;
-    private int goodPostureSessions = 0;
-    private int slouchingSessions = 0;
-    private float weeklyAverageUprightMinutes = 0f; // Store weekly average
-    private float bestDayUprightMinutes = 0f; // Store best day upright time
+    // Cycle duration in seconds
+    private static final float CYCLE_DURATION_SECONDS = 10f;
+
+    private float weeklyAverageUprightMinutes = 0f;
+    private float bestDayUprightMinutes = 0f;
+
+    // Cleanup tracking - only once per session
+    private static boolean hasCleanedUpThisSession = false;
 
     @Nullable
     @Override
@@ -60,19 +70,50 @@ public class AnalyticsFragment extends Fragment {
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
 
-        // Initialize PostureAnalyzer
         postureAnalyzer = new PostureAnalyzer();
-
-        // Set up Analyze button (keep for manual refresh)
         binding.btnAnalyzePosture.setOnClickListener(v -> analyzePostureData());
 
-        // AUTO-ANALYZE: Check for unanalyzed sessions when fragment is viewed
-        autoAnalyzeIfNeeded();
-
-        // Load existing analytics data
-        loadAnalyticsData();
+        // ✅ Run cleanup first, then load data
+        if (!hasCleanedUpThisSession) {
+            runCleanupThenLoad();
+        } else {
+            autoAnalyzeIfNeeded();
+            loadAnalyticsData();
+        }
     }
 
+    /**
+     * ✅ Clean up old sessions before loading analytics
+     */
+    private void runCleanupThenLoad() {
+        postureAnalyzer.cleanupOldSessions(new PostureAnalyzer.OnCleanupCompleteListener() {
+            @Override
+            public void onCleanupComplete(int deletedCount) {
+                hasCleanedUpThisSession = true;
+                if (deletedCount > 0) {
+                    Log.d(TAG, "✓ Cleaned " + deletedCount + " old sessions");
+                }
+                if (isAdded()) {
+                    autoAnalyzeIfNeeded();
+                    loadAnalyticsData();
+                }
+            }
+
+            @Override
+            public void onCleanupError(String error) {
+                hasCleanedUpThisSession = true;
+                Log.e(TAG, "Cleanup error: " + error);
+                if (isAdded()) {
+                    autoAnalyzeIfNeeded();
+                    loadAnalyticsData();
+                }
+            }
+        });
+    }
+
+    /**
+     * ✅ OPTIMIZED: Only check if ANY unanalyzed exist (limitToLast(1))
+     */
     private void autoAnalyzeIfNeeded() {
         String userId = FirebaseAuth.getInstance().getCurrentUser().getUid();
 
@@ -80,29 +121,19 @@ public class AnalyticsFragment extends Fragment {
                 .getReference("posture_sessions")
                 .child(userId);
 
-        // Check if there are any unanalyzed sessions
         sessionsRef.orderByChild("analyzed").equalTo(false)
+                .limitToLast(1)  // ✅ Only check if any exist
                 .addListenerForSingleValueEvent(new ValueEventListener() {
                     @Override
                     public void onDataChange(@NonNull DataSnapshot snapshot) {
                         if (snapshot.getChildrenCount() > 0) {
-                            Log.d(TAG, "Found " + snapshot.getChildrenCount() +
-                                    " unanalyzed sessions. Auto-analyzing...");
+                            Log.d(TAG, "Found unanalyzed sessions. Auto-analyzing...");
 
-                            // Silently analyze without showing toast
                             postureAnalyzer.analyzeUnprocessedSessions(new PostureAnalyzer.OnAnalysisCompleteListener() {
                                 @Override
                                 public void onAnalysisComplete(int sessionsAnalyzed, int slouchingSessions) {
-                                    Log.d(TAG, "Auto-analysis complete: " + sessionsAnalyzed + " sessions");
-
-                                    // FIXED: Check if fragment is still attached before updating UI
                                     if (isAdded() && getActivity() != null) {
-                                        requireActivity().runOnUiThread(() -> {
-                                            // Refresh analytics display
-                                            loadAnalyticsData();
-                                        });
-                                    } else {
-                                        Log.d(TAG, "Fragment not attached - skipping UI update");
+                                        requireActivity().runOnUiThread(() -> loadAnalyticsData());
                                     }
                                 }
 
@@ -116,275 +147,194 @@ public class AnalyticsFragment extends Fragment {
 
                     @Override
                     public void onCancelled(@NonNull DatabaseError error) {
-                        Log.e(TAG, "Error checking for unanalyzed sessions: " + error.getMessage());
+                        Log.e(TAG, "Error checking sessions: " + error.getMessage());
                     }
                 });
     }
 
     private void analyzePostureData() {
-        // Show loading state
         binding.btnAnalyzePosture.setEnabled(false);
         binding.btnAnalyzePosture.setText("Analyzing...");
-        Toast.makeText(getContext(), "Analyzing posture data...", Toast.LENGTH_SHORT).show();
 
         postureAnalyzer.analyzeUnprocessedSessions(new PostureAnalyzer.OnAnalysisCompleteListener() {
             @Override
             public void onAnalysisComplete(int sessionsAnalyzed, int slouchingSessions) {
-                if (!isAdded() || getActivity() == null) {
-                    Log.d(TAG, "Fragment not attached - skipping analysis result update");
-                    return;
-                }
+                if (!isAdded() || getActivity() == null) return;
+
                 requireActivity().runOnUiThread(() -> {
-                    // Reset button
                     binding.btnAnalyzePosture.setEnabled(true);
                     binding.btnAnalyzePosture.setText("Analyze Posture Data");
 
-                    // Show results
                     int goodPosture = sessionsAnalyzed - slouchingSessions;
-                    String message = String.format(
-                            "✓ Analysis Complete!\n\n" +
-                                    "Sessions analyzed: %d\n" +
-                                    "Good posture: %d\n" +
-                                    "Slouching: %d",
-                            sessionsAnalyzed, goodPosture, slouchingSessions
-                    );
+                    Toast.makeText(getContext(),
+                            "✓ Analyzed " + sessionsAnalyzed + " sessions",
+                            Toast.LENGTH_SHORT).show();
 
-                    Toast.makeText(getContext(), message, Toast.LENGTH_LONG).show();
-
-                    // Refresh analytics display
                     loadAnalyticsData();
                 });
             }
 
             @Override
             public void onAnalysisError(String error) {
+                if (!isAdded() || getActivity() == null) return;
 
-                if (!isAdded() || getActivity() == null) {
-                    Log.d(TAG, "Fragment not attached - skipping error display");
-                    return;
-                }
                 requireActivity().runOnUiThread(() -> {
                     binding.btnAnalyzePosture.setEnabled(true);
                     binding.btnAnalyzePosture.setText("Analyze Posture Data");
-                    Toast.makeText(getContext(), "Analysis error: " + error,
-                            Toast.LENGTH_SHORT).show();
+                    Toast.makeText(getContext(), "Error: " + error, Toast.LENGTH_SHORT).show();
                 });
-            }
-        });
-    }
-
-    private void loadAnalyticsData() {
-        String userId = FirebaseAuth.getInstance().getCurrentUser().getUid();
-
-        DatabaseReference sessionsRef = FirebaseDatabase.getInstance()
-                .getReference("posture_sessions")
-                .child(userId);
-
-        // Query ALL analyzed sessions for overall percentage
-        sessionsRef.orderByChild("analyzed").equalTo(true)
-                .addListenerForSingleValueEvent(new ValueEventListener() {
-                    @Override
-                    public void onDataChange(@NonNull DataSnapshot snapshot) {
-                        int totalAnalyzedSessions = 0;
-                        int goodPostureSessions = 0;
-                        int slouchingSessions = 0;
-
-                        Log.d(TAG, "Loading analytics from " + snapshot.getChildrenCount() + " analyzed sessions");
-
-                        for (DataSnapshot sessionSnapshot : snapshot.getChildren()) {
-                            PostureSession session = sessionSnapshot.getValue(PostureSession.class);
-
-                            if (session != null && session.analyzed != null && session.analyzed) {
-                                totalAnalyzedSessions++;
-
-                                // Check if slouching
-                                if (session.slouching != null && session.slouching) {
-                                    slouchingSessions++;
-                                } else {
-                                    goodPostureSessions++;
-                                }
-                            }
-                        }
-
-                        // Update UI on main thread
-                        int finalGoodPosture = goodPostureSessions;
-                        int finalSlouchingSessions = slouchingSessions;
-                        int finalTotal = totalAnalyzedSessions;
-
-                        requireActivity().runOnUiThread(() -> {
-                            // Update insight cards
-                            updateInsightCards(finalTotal, finalSlouchingSessions, finalGoodPosture);
-
-                            // Update pie chart with overall percentage
-                            updatePieChart(finalGoodPosture, finalSlouchingSessions);
-
-                            // Load OVERALL time breakdown (all-time)
-                            loadOverallTimeBreakdown();
-
-                            // Update bar chart with weekly data
-                            loadWeeklyData();
-
-                            Log.d(TAG, "Analytics loaded: " + finalTotal + " sessions total, " +
-                                    finalGoodPosture + " good posture, " +
-                                    finalSlouchingSessions + " slouching");
-                        });
-                    }
-
-                    @Override
-                    public void onCancelled(@NonNull DatabaseError error) {
-                        Log.e(TAG, "Error loading analytics: " + error.getMessage());
-                        requireActivity().runOnUiThread(() -> {
-                            Toast.makeText(getContext(),
-                                    "Failed to load analytics: " + error.getMessage(),
-                                    Toast.LENGTH_SHORT).show();
-                        });
-                    }
-                });
-
-        // Load total connection time for the Total card
-        loadTotalConnectionTime();
-    }
-
-    private void loadOverallTimeBreakdown() {
-        String userId = FirebaseAuth.getInstance().getCurrentUser().getUid();
-
-        DatabaseReference statsRef = FirebaseDatabase.getInstance()
-                .getReference("daily_stats")
-                .child(userId);
-
-        // Load ALL daily stats to sum up total time
-        statsRef.addListenerForSingleValueEvent(new ValueEventListener() {
-            @Override
-            public void onDataChange(@NonNull DataSnapshot snapshot) {
-                float totalUprightMinutes = 0f;
-                float totalSlouchMinutes = 0f;
-
-                // Sum up all days
-                for (DataSnapshot daySnapshot : snapshot.getChildren()) {
-                    Float uprightMin = daySnapshot.child("upright_minutes").getValue(Float.class);
-                    Float slouchMin = daySnapshot.child("slouch_minutes").getValue(Float.class);
-
-                    if (uprightMin != null) {
-                        totalUprightMinutes += uprightMin;
-                    }
-                    if (slouchMin != null) {
-                        totalSlouchMinutes += slouchMin;
-                    }
-                }
-
-                // Convert to hours
-                float totalUprightHours = totalUprightMinutes / 60.0f;
-                float totalSlouchHours = totalSlouchMinutes / 60.0f;
-
-                requireActivity().runOnUiThread(() -> {
-                    updatePostureInfoCards(totalUprightHours, totalSlouchHours);
-                });
-
-                Log.d(TAG, "Overall time breakdown: Upright=" + totalUprightHours +
-                        "h, Slouch=" + totalSlouchHours + "h");
-            }
-
-            @Override
-            public void onCancelled(@NonNull DatabaseError error) {
-                Log.e(TAG, "Error loading overall time: " + error.getMessage());
             }
         });
     }
 
     /**
-     * Load today's slouch percentage and calculate time breakdown
+     * ✅ OPTIMIZED: Load ALL analytics from daily_stats (lightweight)
+     * Instead of querying posture_sessions which has large sensor arrays
      */
-    private void loadTodaySlouchPercentageForCards(float todayActiveMinutes) {
+    private void loadAnalyticsData() {
         String userId = FirebaseAuth.getInstance().getCurrentUser().getUid();
-        String todayKey = getTodayDateKey();
 
+        // ✅ Use daily_stats - much smaller than posture_sessions!
         DatabaseReference statsRef = FirebaseDatabase.getInstance()
                 .getReference("daily_stats")
-                .child(userId)
-                .child(todayKey);
+                .child(userId);
 
         statsRef.addListenerForSingleValueEvent(new ValueEventListener() {
             @Override
             public void onDataChange(@NonNull DataSnapshot snapshot) {
-                double slouchPercentage = 0.0;
+                if (!isAdded() || getActivity() == null) return;
 
-                if (snapshot.exists()) {
-                    Double slouch = snapshot.child("slouch_percentage").getValue(Double.class);
-                    slouchPercentage = (slouch != null) ? slouch : 0.0;
+                // Calculate ALL totals from daily_stats in a single pass
+                int totalGoodPosture = 0;
+                int totalSlouching = 0;
+
+                // Weekly data
+                Calendar cal = Calendar.getInstance();
+                SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
+
+                int currentDayOfWeek = cal.get(Calendar.DAY_OF_WEEK);
+                int daysToMonday = (currentDayOfWeek == Calendar.SUNDAY) ? 6 : currentDayOfWeek - Calendar.MONDAY;
+                cal.add(Calendar.DAY_OF_YEAR, -daysToMonday);
+
+                String[] weekDays = new String[7];
+                int[] weeklyGoodSessions = new int[7];
+                int[] weeklySlouchSessions = new int[7];
+
+                for (int i = 0; i < 7; i++) {
+                    weekDays[i] = sdf.format(cal.getTime());
+                    cal.add(Calendar.DAY_OF_YEAR, 1);
                 }
 
-                // Calculate time breakdown
-                float slouchMinutes = todayActiveMinutes * (float)(slouchPercentage / 100.0);
-                float uprightMinutes = todayActiveMinutes - slouchMinutes;
+                // Single pass through all daily stats
+                for (DataSnapshot daySnapshot : snapshot.getChildren()) {
+                    String dateKey = daySnapshot.getKey();
 
-                // Convert to hours
-                float uprightHours = uprightMinutes / 60.0f;
-                float slouchHours = slouchMinutes / 60.0f;
+                    Integer good = daySnapshot.child("good_posture_sessions").getValue(Integer.class);
+                    Integer slouch = daySnapshot.child("slouching_sessions").getValue(Integer.class);
+
+                    int goodCount = (good != null) ? good : 0;
+                    int slouchCount = (slouch != null) ? slouch : 0;
+
+                    // Add to all-time totals
+                    totalGoodPosture += goodCount;
+                    totalSlouching += slouchCount;
+
+                    // Check if in current week for bar chart
+                    for (int i = 0; i < 7; i++) {
+                        if (weekDays[i].equals(dateKey)) {
+                            weeklyGoodSessions[i] = goodCount;
+                            weeklySlouchSessions[i] = slouchCount;
+                            break;
+                        }
+                    }
+                }
+
+                // Calculate minutes from session counts
+                float[] weeklyUprightMinutes = new float[7];
+                float[] weeklySlouchMinutes = new float[7];
+
+                for (int i = 0; i < 7; i++) {
+                    weeklyUprightMinutes[i] = weeklyGoodSessions[i] * CYCLE_DURATION_SECONDS / 60f;
+                    weeklySlouchMinutes[i] = weeklySlouchSessions[i] * CYCLE_DURATION_SECONDS / 60f;
+                }
+
+                // Weekly stats
+                float totalWeeklyUpright = 0;
+                float maxUpright = 0;
+                for (float minutes : weeklyUprightMinutes) {
+                    totalWeeklyUpright += minutes;
+                    if (minutes > maxUpright) maxUpright = minutes;
+                }
+
+                weeklyAverageUprightMinutes = totalWeeklyUpright / 7.0f;
+                bestDayUprightMinutes = maxUpright;
+
+                // All-time hours
+                float totalUprightHours = (totalGoodPosture * CYCLE_DURATION_SECONDS / 60f) / 60f;
+                float totalSlouchHours = (totalSlouching * CYCLE_DURATION_SECONDS / 60f) / 60f;
+
+                // Final values
+                final int finalGoodPosture = totalGoodPosture;
+                final int finalSlouching = totalSlouching;
+                final float finalUprightHours = totalUprightHours;
+                final float finalSlouchHours = totalSlouchHours;
+                final float[] finalWeeklyUpright = weeklyUprightMinutes;
+                final float[] finalWeeklySlouch = weeklySlouchMinutes;
 
                 requireActivity().runOnUiThread(() -> {
-                    updatePostureInfoCards(uprightHours, slouchHours);
+                    updatePieChart(finalGoodPosture, finalSlouching);
+                    updateBarChart(finalWeeklyUpright, finalWeeklySlouch);
+                    updatePostureInfoCards(finalUprightHours, finalSlouchHours);
+                    updateDailyAvgCard();
+                    updateBestDayCard();
                 });
 
-                Log.d(TAG, "Today's time breakdown: Active=" + todayActiveMinutes +
-                        "min, Upright=" + uprightMinutes + "min, Slouch=" + slouchMinutes + "min");
+                Log.d(TAG, "Analytics loaded from daily_stats: " +
+                        (finalGoodPosture + finalSlouching) + " total sessions");
             }
 
             @Override
             public void onCancelled(@NonNull DatabaseError error) {
-                Log.e(TAG, "Error loading slouch percentage: " + error.getMessage());
+                Log.e(TAG, "Error loading analytics: " + error.getMessage());
             }
         });
-    }
 
-
-
-    private void updateInsightCards(int total, int slouching, int goodPosture) {
-        // Update the "Total" card
-        binding.tvTotalValue.setText(String.valueOf(total));
-
-        // You can add more card updates here as needed
-        // For example, calculate daily average, best day, etc.
         loadTotalConnectionTime();
     }
 
     private void loadTotalConnectionTime() {
         String userId = FirebaseAuth.getInstance().getCurrentUser().getUid();
-        DatabaseReference userRef = FirebaseDatabase.getInstance()
+
+        FirebaseDatabase.getInstance()
                 .getReference("users")
-                .child(userId);
+                .child(userId)
+                .child("total_connection_time")
+                .addListenerForSingleValueEvent(new ValueEventListener() {
+                    @Override
+                    public void onDataChange(@NonNull DataSnapshot snapshot) {
+                        if (!isAdded() || getActivity() == null) return;
 
-        userRef.child("total_connection_time").addListenerForSingleValueEvent(new ValueEventListener() {
-            @Override
-            public void onDataChange(@NonNull DataSnapshot snapshot) {
-                if (snapshot.exists()) {
-                    Float totalHours = snapshot.getValue(Float.class);
-                    if (totalHours != null) {
-                        totalConnectionTimeHours = totalHours;
-
-                        requireActivity().runOnUiThread(() -> {
-                            // Update Total card with hours
-                            binding.tvTotalValue.setText(String.format("%.2fh", totalHours));
-
-                            // REMOVED: updatePostureInfoCards()
-                            // The posture info cards are now updated by loadTodayTimeBreakdown()
-                        });
+                        if (snapshot.exists()) {
+                            Float totalHours = snapshot.getValue(Float.class);
+                            if (totalHours != null) {
+                                requireActivity().runOnUiThread(() -> {
+                                    binding.tvTotalValue.setText(String.format(Locale.US, "%.2fh", totalHours));
+                                });
+                            }
+                        }
                     }
-                }
-            }
 
-            @Override
-            public void onCancelled(@NonNull DatabaseError error) {
-                Log.e(TAG, "Error loading total time: " + error.getMessage());
-            }
-        });
+                    @Override
+                    public void onCancelled(@NonNull DatabaseError error) {
+                        Log.e(TAG, "Error loading total time: " + error.getMessage());
+                    }
+                });
     }
 
     private void updatePieChart(int goodPosture, int slouching) {
         PieChart pieChart = binding.pieChart;
 
-        // Check if we have any data
         if (goodPosture == 0 && slouching == 0) {
-            // Show empty state
             pieChart.clear();
             pieChart.setNoDataText("No analyzed sessions yet");
             pieChart.setNoDataTextColor(getResources().getColor(R.color.ios_text_secondary, null));
@@ -397,20 +347,15 @@ public class AnalyticsFragment extends Fragment {
         entries.add(new PieEntry(slouching, "Slouch"));
 
         PieDataSet dataSet = new PieDataSet(entries, "Posture Distribution");
-
-        // Colors: Blue for upright, Orange for slouch
         dataSet.setColors(
                 getResources().getColor(R.color.ios_blue, null),
                 getResources().getColor(R.color.ios_orange, null)
         );
-
         dataSet.setDrawValues(false);
-
 
         PieData data = new PieData(dataSet);
         pieChart.setData(data);
 
-        // Configure pie chart appearance
         pieChart.setDrawHoleEnabled(true);
         pieChart.setHoleRadius(70f);
         pieChart.setTransparentCircleRadius(75f);
@@ -418,118 +363,16 @@ public class AnalyticsFragment extends Fragment {
         pieChart.getDescription().setEnabled(false);
         pieChart.getLegend().setEnabled(false);
 
-        // Update center text
         int total = goodPosture + slouching;
         int percentage = total > 0 ? (goodPosture * 100 / total) : 0;
         binding.tvPieCenterPercentage.setText(percentage + "%");
 
-        pieChart.invalidate(); // Refresh chart
-
-        Log.d(TAG, "Pie chart updated: " + goodPosture + " upright, " + slouching + " slouch");
-    }
-
-    private void loadWeeklyData() {
-        String userId = FirebaseAuth.getInstance().getCurrentUser().getUid();
-
-        DatabaseReference statsRef = FirebaseDatabase.getInstance()
-                .getReference("daily_stats")
-                .child(userId);
-
-        // Get current week (Monday to Sunday)
-        Calendar cal = Calendar.getInstance();
-        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
-
-        // Store data for each day of the week
-        String[] last7Days = new String[7];
-
-        // Find Monday of current week
-        // Calendar.DAY_OF_WEEK: Sunday=1, Monday=2, ..., Saturday=7
-        int currentDayOfWeek = cal.get(Calendar.DAY_OF_WEEK);
-
-        // Calculate days to subtract to get to Monday
-        int daysToMonday;
-        if (currentDayOfWeek == Calendar.SUNDAY) {
-            daysToMonday = 6; // Sunday is end of week, go back 6 days
-        } else {
-            daysToMonday = currentDayOfWeek - Calendar.MONDAY; // Days since Monday
-        }
-
-        // Go to Monday of this week
-        cal.add(Calendar.DAY_OF_YEAR, -daysToMonday);
-
-        // Build array from Monday to Sunday
-        for (int i = 0; i < 7; i++) {
-            last7Days[i] = sdf.format(cal.getTime());
-            cal.add(Calendar.DAY_OF_YEAR, 1);
-        }
-
-        // Query each day's stats
-        statsRef.addListenerForSingleValueEvent(new ValueEventListener() {
-            @Override
-            public void onDataChange(@NonNull DataSnapshot snapshot) {
-                float[] uprightMinutes = new float[7];
-                float[] slouchMinutes = new float[7];
-
-                // Initialize with zeros
-                for (int i = 0; i < 7; i++) {
-                    uprightMinutes[i] = 0;
-                    slouchMinutes[i] = 0;
-                }
-
-                // Fill in actual data from stored time values
-                for (int i = 0; i < 7; i++) {
-                    String dateKey = last7Days[i];
-                    DataSnapshot daySnapshot = snapshot.child(dateKey);
-
-                    if (daySnapshot.exists()) {
-                        // NEW: Use actual stored time values instead of session estimates
-                        Float upright = daySnapshot.child("upright_minutes").getValue(Float.class);
-                        Float slouch = daySnapshot.child("slouch_minutes").getValue(Float.class);
-
-                        if (upright != null) {
-                            uprightMinutes[i] = upright;
-                        }
-                        if (slouch != null) {
-                            slouchMinutes[i] = slouch;
-                        }
-                    }
-                }
-
-                // Calculate weekly average upright time
-                float totalUprightMinutes = 0;
-                float maxUprightMinutes = 0;
-
-                for (float minutes : uprightMinutes) {
-                    totalUprightMinutes += minutes;
-                    // Find the maximum (best day)
-                    if (minutes > maxUprightMinutes) {
-                        maxUprightMinutes = minutes;
-                    }
-                }
-
-                weeklyAverageUprightMinutes = totalUprightMinutes / 7.0f;
-                bestDayUprightMinutes = maxUprightMinutes;
-
-                requireActivity().runOnUiThread(() -> {
-                    updateBarChart(uprightMinutes, slouchMinutes);
-                    updateDailyAvgCard();
-                    updateBestDayCard();
-                });
-
-                Log.d(TAG, "Weekly data loaded with ACTUAL time values (not estimates)");
-            }
-
-            @Override
-            public void onCancelled(@NonNull DatabaseError error) {
-                Log.e(TAG, "Error loading weekly data: " + error.getMessage());
-            }
-        });
+        pieChart.invalidate();
     }
 
     private void updateBarChart(float[] uprightMinutes, float[] slouchMinutes) {
         BarChart barChart = binding.barChart;
 
-        // Create entries for upright (blue) and slouch (orange)
         ArrayList<BarEntry> uprightEntries = new ArrayList<>();
         ArrayList<BarEntry> slouchEntries = new ArrayList<>();
 
@@ -538,19 +381,16 @@ public class AnalyticsFragment extends Fragment {
             slouchEntries.add(new BarEntry(i, slouchMinutes[i]));
         }
 
-        // Create datasets
         BarDataSet uprightDataSet = new BarDataSet(uprightEntries, "Upright");
         uprightDataSet.setColor(getResources().getColor(R.color.ios_blue, null));
-        uprightDataSet.setDrawValues(false); // Remove text labels above bars
+        uprightDataSet.setDrawValues(false);
 
         BarDataSet slouchDataSet = new BarDataSet(slouchEntries, "Slouch");
         slouchDataSet.setColor(getResources().getColor(R.color.ios_orange, null));
-        slouchDataSet.setDrawValues(false); // Remove text labels above bars
+        slouchDataSet.setDrawValues(false);
 
-        // Combine datasets
         BarData barData = new BarData(uprightDataSet, slouchDataSet);
 
-        // Group bars
         float groupSpace = 0.3f;
         float barSpace = 0.05f;
         float barWidth = 0.3f;
@@ -558,15 +398,13 @@ public class AnalyticsFragment extends Fragment {
         barData.setBarWidth(barWidth);
         barChart.setData(barData);
 
-        // Configure chart
         barChart.getDescription().setEnabled(false);
         barChart.setDrawGridBackground(false);
         barChart.setDrawBarShadow(false);
         barChart.setHighlightFullBarEnabled(false);
-        barChart.setDrawValueAboveBar(false); // Ensure no values above bars
-        barChart.setTouchEnabled(false); // Disable touch interactions for cleaner look
+        barChart.setDrawValueAboveBar(false);
+        barChart.setTouchEnabled(false);
 
-        // X-axis configuration
         barChart.getXAxis().setPosition(com.github.mikephil.charting.components.XAxis.XAxisPosition.BOTTOM);
         barChart.getXAxis().setGranularity(1f);
         barChart.getXAxis().setGranularityEnabled(true);
@@ -576,12 +414,8 @@ public class AnalyticsFragment extends Fragment {
         barChart.getXAxis().setAxisMaximum(7f);
         barChart.getXAxis().setTextColor(getResources().getColor(R.color.ios_text_primary, null));
         barChart.getXAxis().setTextSize(11f);
+        barChart.getXAxis().setValueFormatter(new com.github.mikephil.charting.formatter.IndexAxisValueFormatter(getDayLabels()));
 
-        // Set day labels (Mon, Tue, Wed, etc.)
-        String[] dayLabels = getDayLabels();
-        barChart.getXAxis().setValueFormatter(new com.github.mikephil.charting.formatter.IndexAxisValueFormatter(dayLabels));
-
-        // Y-axis configuration (showing minutes)
         barChart.getAxisLeft().setAxisMinimum(0f);
         barChart.getAxisLeft().setDrawGridLines(true);
         barChart.getAxisLeft().setGridColor(getResources().getColor(R.color.ios_text_secondary, null));
@@ -596,44 +430,26 @@ public class AnalyticsFragment extends Fragment {
         });
         barChart.getAxisRight().setEnabled(false);
 
-        // Legend
         barChart.getLegend().setEnabled(true);
         barChart.getLegend().setTextColor(getResources().getColor(R.color.ios_text_primary, null));
         barChart.getLegend().setTextSize(12f);
         barChart.getLegend().setVerticalAlignment(com.github.mikephil.charting.components.Legend.LegendVerticalAlignment.TOP);
         barChart.getLegend().setHorizontalAlignment(com.github.mikephil.charting.components.Legend.LegendHorizontalAlignment.RIGHT);
 
-        // Group bars together
         barChart.groupBars(0f, groupSpace, barSpace);
-
-        // Animation
         barChart.animateY(1000);
-
         barChart.invalidate();
-
-        Log.d(TAG, "Bar chart updated with weekly time data (minutes)");
     }
 
     private String[] getDayLabels() {
-        // Static labels: Monday to Sunday
-        SimpleDateFormat dayFormat = new SimpleDateFormat("EEE", Locale.US); // Short day name
+        SimpleDateFormat dayFormat = new SimpleDateFormat("EEE", Locale.US);
         Calendar cal = Calendar.getInstance();
         String[] labels = new String[7];
 
-        // Find Monday of current week
         int currentDayOfWeek = cal.get(Calendar.DAY_OF_WEEK);
-
-        int daysToMonday;
-        if (currentDayOfWeek == Calendar.SUNDAY) {
-            daysToMonday = 6;
-        } else {
-            daysToMonday = currentDayOfWeek - Calendar.MONDAY;
-        }
-
-        // Go to Monday of this week
+        int daysToMonday = (currentDayOfWeek == Calendar.SUNDAY) ? 6 : currentDayOfWeek - Calendar.MONDAY;
         cal.add(Calendar.DAY_OF_YEAR, -daysToMonday);
 
-        // Build labels from Monday to Sunday
         for (int i = 0; i < 7; i++) {
             labels[i] = dayFormat.format(cal.getTime());
             cal.add(Calendar.DAY_OF_YEAR, 1);
@@ -643,33 +459,16 @@ public class AnalyticsFragment extends Fragment {
     }
 
     private void updatePostureInfoCards(float uprightHours, float slouchHours) {
-        // Update upright sessions count
         binding.tvUprightValue.setText(String.format(Locale.US, "%.2fh", uprightHours));
-
-        // Update slouching sessions count
         binding.tvSlouchValue.setText(String.format(Locale.US, "%.2fh", slouchHours));
-
-        Log.d(TAG, "Posture info cards updated - Upright: " + uprightHours +
-                "h, Slouch: " + slouchHours + "h");
-    }
-
-    private String getTodayDateKey() {
-        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
-        return sdf.format(new Date());
     }
 
     private void updateBestDayCard() {
-        // The card shows the best day's upright time in minutes with 1 decimal place
         binding.tvBestDayValue.setText(String.format(Locale.US, "%.1f min", bestDayUprightMinutes));
-
-        Log.d(TAG, "Best day upright time: " + bestDayUprightMinutes + " min");
     }
 
     private void updateDailyAvgCard() {
-        // The card shows weekly average in minutes with 1 decimal place
         binding.tvDailyAvgValue.setText(String.format(Locale.US, "%.1f min", weeklyAverageUprightMinutes));
-
-        Log.d(TAG, "Daily (weekly) average upright time: " + weeklyAverageUprightMinutes + " min");
     }
 
     @Override

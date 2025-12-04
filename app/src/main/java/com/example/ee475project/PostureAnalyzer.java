@@ -13,11 +13,20 @@ import com.google.firebase.database.ValueEventListener;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
 
 public class PostureAnalyzer {
 
     private static final String TAG = "PostureAnalyzer";
     private static final float THRESHOLD_MULTIPLIER = 0.65f;
+
+    // ✅ REDUCED: Only process 3 sessions at a time to avoid memory issues
+    private static final int MAX_SESSIONS_PER_ANALYSIS = 3;
+    private static final int MAX_CLEANUP_BATCH_SIZE = 10;
+
+    // Session retention - 7 days
+    private static final long SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000L;
 
     private DatabaseReference sessionsRef;
     private DatabaseReference statsRef;
@@ -50,10 +59,50 @@ public class PostureAnalyzer {
     }
 
     /**
+     * ✅ NEW: Clean up sessions older than 7 days
+     * Safe because daily_stats already has aggregated data
+     */
+    public void cleanupOldSessions(OnCleanupCompleteListener listener) {
+        long cutoffTime = System.currentTimeMillis() - SESSION_RETENTION_MS;
+
+        sessionsRef.orderByChild("timestamp")
+                .endAt(cutoffTime)
+                .limitToFirst(20)  // Small batch
+                .addListenerForSingleValueEvent(new ValueEventListener() {
+                    @Override
+                    public void onDataChange(@NonNull DataSnapshot snapshot) {
+                        int deletedCount = 0;
+
+                        for (DataSnapshot sessionSnapshot : snapshot.getChildren()) {
+                            sessionSnapshot.getRef().removeValue();
+                            deletedCount++;
+                        }
+
+                        if (deletedCount > 0) {
+                            Log.d(TAG, "✓ Cleaned up " + deletedCount + " old sessions");
+                        }
+
+                        if (listener != null) {
+                            listener.onCleanupComplete(deletedCount);
+                        }
+                    }
+
+                    @Override
+                    public void onCancelled(@NonNull DatabaseError error) {
+                        if (listener != null) {
+                            listener.onCleanupError(error.getMessage());
+                        }
+                    }
+                });
+    }
+
+    /**
      * Clean up incomplete/stale sessions from Firebase
+     * ✅ OPTIMIZED: Smaller batch size
      */
     public void cleanupIncompleteSessions(OnCleanupCompleteListener listener) {
         sessionsRef.orderByChild("analyzed").equalTo(false)
+                .limitToLast(MAX_CLEANUP_BATCH_SIZE)
                 .addListenerForSingleValueEvent(new ValueEventListener() {
                     @Override
                     public void onDataChange(@NonNull DataSnapshot snapshot) {
@@ -61,33 +110,34 @@ public class PostureAnalyzer {
                         long currentTime = System.currentTimeMillis();
 
                         for (DataSnapshot sessionSnapshot : snapshot.getChildren()) {
-                            PostureSession session = sessionSnapshot.getValue(PostureSession.class);
-
-                            if (session == null) {
-                                sessionSnapshot.getRef().removeValue();
-                                deletedCount++;
-                                continue;
-                            }
+                            // ✅ Don't deserialize entire session - just check fields directly
+                            Long timestamp = sessionSnapshot.child("timestamp").getValue(Long.class);
+                            boolean hasUpperBack = sessionSnapshot.hasChild("upperBack");
+                            boolean hasLowerBack = sessionSnapshot.hasChild("lowerBack");
 
                             boolean shouldDelete = false;
 
                             // Missing sensor data
-                            if (session.upperBack == null || session.lowerBack == null) {
+                            if (!hasUpperBack || !hasLowerBack) {
                                 shouldDelete = true;
                             }
 
                             // Stale session (older than 24 hours)
-                            if (currentTime - session.timestamp > STALE_SESSION_THRESHOLD_MS) {
+                            if (timestamp != null && currentTime - timestamp > STALE_SESSION_THRESHOLD_MS) {
                                 shouldDelete = true;
                             }
 
                             if (shouldDelete) {
                                 sessionSnapshot.getRef().removeValue();
                                 deletedCount++;
+                                Log.d(TAG, "Deleted incomplete session: " + sessionSnapshot.getKey());
                             }
                         }
 
-                        Log.d(TAG, "Cleanup: " + deletedCount + " incomplete sessions deleted");
+                        if (deletedCount > 0) {
+                            Log.d(TAG, "Cleanup: " + deletedCount + " incomplete sessions deleted");
+                        }
+
                         if (listener != null) {
                             listener.onCleanupComplete(deletedCount);
                         }
@@ -103,6 +153,9 @@ public class PostureAnalyzer {
     }
 
     public void analyzeUnprocessedSessions(OnAnalysisCompleteListener listener) {
+        Log.d(TAG, "═══════════════════════════════════════════════════════════");
+        Log.d(TAG, "Starting analysis for user: " + userId);
+
         calibrationRef.addListenerForSingleValueEvent(new ValueEventListener() {
             @Override
             public void onDataChange(@NonNull DataSnapshot snapshot) {
@@ -110,13 +163,16 @@ public class PostureAnalyzer {
                     calibrationData = snapshot.getValue(CalibrationData.class);
 
                     if (calibrationData != null && calibrationData.isCalibrated) {
+                        Log.d(TAG, "✓ Calibration loaded successfully");
                         processUnprocessedSessions(listener);
                     } else {
+                        Log.w(TAG, "✗ Calibration not complete");
                         if (listener != null) {
                             listener.onAnalysisError("Please complete calibration first.");
                         }
                     }
                 } else {
+                    Log.w(TAG, "✗ No calibration data found");
                     if (listener != null) {
                         listener.onAnalysisError("Please complete calibration first.");
                     }
@@ -125,6 +181,7 @@ public class PostureAnalyzer {
 
             @Override
             public void onCancelled(@NonNull DatabaseError error) {
+                Log.e(TAG, "Calibration load error: " + error.getMessage());
                 if (listener != null) {
                     listener.onAnalysisError("Failed to load calibration: " + error.getMessage());
                 }
@@ -132,27 +189,98 @@ public class PostureAnalyzer {
         });
     }
 
+    /**
+     * ✅ HEAVILY OPTIMIZED with comprehensive logging
+     */
     private void processUnprocessedSessions(OnAnalysisCompleteListener listener) {
-        // Query ONLY unanalyzed sessions (removed the debug query that listed ALL sessions)
+        Log.d(TAG, "Querying unanalyzed sessions (limit=" + MAX_SESSIONS_PER_ANALYSIS + ")...");
+
         sessionsRef.orderByChild("analyzed").equalTo(false)
+                .limitToLast(MAX_SESSIONS_PER_ANALYSIS)
                 .addListenerForSingleValueEvent(new ValueEventListener() {
                     @Override
                     public void onDataChange(@NonNull DataSnapshot snapshot) {
+                        Log.d(TAG, "───────────────────────────────────────────────────────────");
+                        Log.d(TAG, "Query returned " + snapshot.getChildrenCount() + " unanalyzed sessions");
+
+                        if (snapshot.getChildrenCount() == 0) {
+                            Log.d(TAG, "No unanalyzed sessions found!");
+                            Log.d(TAG, "Possible reasons:");
+                            Log.d(TAG, "  1. All sessions already analyzed=true");
+                            Log.d(TAG, "  2. Session not saved to Firebase yet");
+                            Log.d(TAG, "  3. No sessions exist for this user");
+
+                            if (listener != null) {
+                                listener.onAnalysisComplete(0, 0);
+                            }
+                            return;
+                        }
+
                         int analyzedCount = 0;
                         int slouchingSessions = 0;
                         int skippedCount = 0;
 
-                        Log.d(TAG, "Found " + snapshot.getChildrenCount() + " unprocessed sessions");
-
                         for (DataSnapshot sessionSnapshot : snapshot.getChildren()) {
-                            PostureSession session = sessionSnapshot.getValue(PostureSession.class);
+                            String sessionId = sessionSnapshot.getKey();
+                            Log.d(TAG, "───────────────────────────────────────────────────────────");
+                            Log.d(TAG, "Processing: " + sessionId);
 
-                            if (session != null && session.upperBack != null && session.lowerBack != null) {
-                                // ✅ Session has complete data - analyze it
+                            // ✅ Check if session has required data BEFORE deserializing
+                            boolean hasUpperBack = sessionSnapshot.hasChild("upperBack");
+                            boolean hasLowerBack = sessionSnapshot.hasChild("lowerBack");
+                            Boolean analyzed = sessionSnapshot.child("analyzed").getValue(Boolean.class);
+
+                            Log.d(TAG, "  analyzed=" + analyzed);
+                            Log.d(TAG, "  hasUpperBack=" + hasUpperBack);
+                            Log.d(TAG, "  hasLowerBack=" + hasLowerBack);
+
+                            if (!hasUpperBack) {
+                                Log.d(TAG, "  → SKIPPED: Missing upperBack data");
+                                skippedCount++;
+                                continue;
+                            }
+
+                            if (!hasLowerBack) {
+                                Log.d(TAG, "  → SKIPPED: Missing lowerBack data");
+                                skippedCount++;
+                                continue;
+                            }
+
+                            // ✅ Now safe to deserialize
+                            try {
+                                PostureSession session = sessionSnapshot.getValue(PostureSession.class);
+
+                                if (session == null) {
+                                    Log.d(TAG, "  → SKIPPED: Deserialization returned null");
+                                    skippedCount++;
+                                    continue;
+                                }
+
+                                if (session.upperBack == null) {
+                                    Log.d(TAG, "  → SKIPPED: session.upperBack is null");
+                                    skippedCount++;
+                                    continue;
+                                }
+
+                                if (session.lowerBack == null) {
+                                    Log.d(TAG, "  → SKIPPED: session.lowerBack is null");
+                                    skippedCount++;
+                                    continue;
+                                }
+
+                                SensorAngles upperAngles = SensorAngles.fromSensorData(session.upperBack);
+                                SensorAngles lowerAngles = SensorAngles.fromSensorData(session.lowerBack);
+
+                                Log.d(TAG, "  upperBack pitch=" + upperAngles.pitch + ", roll=" + upperAngles.roll);
+                                Log.d(TAG, "  lowerBack pitch=" + lowerAngles.pitch + ", roll=" + lowerAngles.roll);
+
                                 AnalysisResult result = detectSlouchWithCalibration(
                                         session.upperBack,
                                         session.lowerBack
                                 );
+
+                                Log.d(TAG, "  → ANALYZED: slouching=" + result.isSlouchingDetected +
+                                        ", score=" + result.overallSlouchScore);
 
                                 if (result.isSlouchingDetected) {
                                     slouchingSessions++;
@@ -170,36 +298,35 @@ public class PostureAnalyzer {
                                 updates.put("calibrationTimestamp", calibrationData.calibrationTimestamp);
 
                                 sessionSnapshot.getRef().updateChildren(updates);
-
-                                Log.d(TAG, "✓ Analyzed: " + session.sessionId + " → " +
-                                        (result.isSlouchingDetected ? "SLOUCHING" : "GOOD"));
+                                Log.d(TAG, "  → SAVED to Firebase");
 
                                 analyzedCount++;
 
                                 String sessionDateKey = getDateKeyFromTimestamp(session.timestamp);
                                 saveDailyStatsOptimized(sessionDateKey, result.isSlouchingDetected);
 
-                            } else {
-                                // ⚠ Session incomplete - skip it (cleanup will handle later)
+                            } catch (Exception e) {
+                                Log.e(TAG, "  → ERROR: " + e.getClass().getSimpleName() + ": " + e.getMessage());
                                 skippedCount++;
-                                Log.w(TAG, "⚠ Skipped incomplete session: " +
-                                        (session != null ? session.sessionId : "null") +
-                                        " (upper=" + (session != null && session.upperBack != null) +
-                                        ", lower=" + (session != null && session.lowerBack != null) + ")");
                             }
                         }
 
-                        // Notify completion immediately
+                        Log.d(TAG, "═══════════════════════════════════════════════════════════");
+                        Log.d(TAG, "ANALYSIS COMPLETE");
+                        Log.d(TAG, "  Analyzed: " + analyzedCount);
+                        Log.d(TAG, "  Slouching: " + slouchingSessions);
+                        Log.d(TAG, "  Skipped: " + skippedCount);
+                        Log.d(TAG, "═══════════════════════════════════════════════════════════");
+
+                        // Notify completion
                         if (listener != null) {
                             listener.onAnalysisComplete(analyzedCount, slouchingSessions);
                         }
-
-                        Log.d(TAG, "Analysis complete: " + analyzedCount + " analyzed, " +
-                                slouchingSessions + " slouching, " + skippedCount + " skipped");
                     }
 
                     @Override
                     public void onCancelled(@NonNull DatabaseError error) {
+                        Log.e(TAG, "Query error: " + error.getMessage());
                         if (listener != null) {
                             listener.onAnalysisError(error.getMessage());
                         }
@@ -212,9 +339,6 @@ public class PostureAnalyzer {
         return sdf.format(new java.util.Date(timestamp));
     }
 
-    /**
-     * Optimized slouch detection - minimal logging
-     */
     private AnalysisResult detectSlouchWithCalibration(SensorData upperBack, SensorData lowerBack) {
         AnalysisResult result = new AnalysisResult();
 
@@ -252,9 +376,6 @@ public class PostureAnalyzer {
         return result;
     }
 
-    /**
-     * Optimized: Single read + single batched write
-     */
     private void saveDailyStatsOptimized(String dateKey, boolean isSlouching) {
         DatabaseReference dayStatsRef = statsRef.child(dateKey);
 
@@ -311,4 +432,129 @@ public class PostureAnalyzer {
         void onAnalysisComplete(int sessionsAnalyzed, int slouchingSessions);
         void onAnalysisError(String error);
     }
+
+    /**
+     * Analyze a specific session by ID - much faster than querying!
+     */
+    public void analyzeSpecificSession(String sessionId, OnAnalysisCompleteListener listener) {
+        Log.d(TAG, "═══════════════════════════════════════════════════════════");
+        Log.d(TAG, "Analyzing specific session: " + sessionId);
+
+        // First load calibration
+        calibrationRef.addListenerForSingleValueEvent(new ValueEventListener() {
+            @Override
+            public void onDataChange(@NonNull DataSnapshot snapshot) {
+                if (!snapshot.exists()) {
+                    Log.w(TAG, "No calibration data");
+                    if (listener != null) {
+                        listener.onAnalysisError("No calibration data");
+                    }
+                    return;
+                }
+
+                calibrationData = snapshot.getValue(CalibrationData.class);
+                if (calibrationData == null || !calibrationData.isCalibrated) {
+                    Log.w(TAG, "Calibration not complete");
+                    if (listener != null) {
+                        listener.onAnalysisError("Calibration not complete");
+                    }
+                    return;
+                }
+
+                Log.d(TAG, "✓ Calibration loaded");
+
+                // Now fetch and analyze the specific session
+                sessionsRef.child(sessionId).addListenerForSingleValueEvent(new ValueEventListener() {
+                    @Override
+                    public void onDataChange(@NonNull DataSnapshot sessionSnapshot) {
+                        if (!sessionSnapshot.exists()) {
+                            Log.w(TAG, "Session not found: " + sessionId);
+                            if (listener != null) {
+                                listener.onAnalysisComplete(0, 0);
+                            }
+                            return;
+                        }
+
+                        // Check if already analyzed
+                        Boolean analyzed = sessionSnapshot.child("analyzed").getValue(Boolean.class);
+                        if (analyzed != null && analyzed) {
+                            Log.d(TAG, "Session already analyzed");
+                            if (listener != null) {
+                                listener.onAnalysisComplete(0, 0);
+                            }
+                            return;
+                        }
+
+                        try {
+                            PostureSession session = sessionSnapshot.getValue(PostureSession.class);
+
+                            if (session == null || session.upperBack == null || session.lowerBack == null) {
+                                Log.d(TAG, "Session incomplete - missing sensor data");
+                                if (listener != null) {
+                                    listener.onAnalysisComplete(0, 0);
+                                }
+                                return;
+                            }
+
+                            // Analyze!
+                            AnalysisResult result = detectSlouchWithCalibration(
+                                    session.upperBack,
+                                    session.lowerBack
+                            );
+
+                            Log.d(TAG, "  → slouching=" + result.isSlouchingDetected +
+                                    ", score=" + result.overallSlouchScore);
+
+                            // Save results
+                            Map<String, Object> updates = new HashMap<>();
+                            updates.put("analyzed", true);
+                            updates.put("slouching", result.isSlouchingDetected);
+                            updates.put("overallSlouchScore", result.overallSlouchScore);
+                            updates.put("upperBackDeviation", result.upperBackDeviation);
+                            updates.put("lowerBackDeviation", result.lowerBackDeviation);
+                            updates.put("upperBackScore", result.upperBackScore);
+                            updates.put("lowerBackScore", result.lowerBackScore);
+                            updates.put("calibrationTimestamp", calibrationData.calibrationTimestamp);
+
+                            sessionSnapshot.getRef().updateChildren(updates);
+
+                            // Update daily stats
+                            String sessionDateKey = getDateKeyFromTimestamp(session.timestamp);
+                            saveDailyStatsOptimized(sessionDateKey, result.isSlouchingDetected);
+
+                            Log.d(TAG, "✓ Session analyzed and saved");
+                            Log.d(TAG, "═══════════════════════════════════════════════════════════");
+
+                            if (listener != null) {
+                                listener.onAnalysisComplete(1, result.isSlouchingDetected ? 1 : 0);
+                            }
+
+                        } catch (Exception e) {
+                            Log.e(TAG, "Error analyzing session: " + e.getMessage());
+                            if (listener != null) {
+                                listener.onAnalysisError(e.getMessage());
+                            }
+                        }
+                    }
+
+                    @Override
+                    public void onCancelled(@NonNull DatabaseError error) {
+                        Log.e(TAG, "Error fetching session: " + error.getMessage());
+                        if (listener != null) {
+                            listener.onAnalysisError(error.getMessage());
+                        }
+                    }
+                });
+            }
+
+            @Override
+            public void onCancelled(@NonNull DatabaseError error) {
+                Log.e(TAG, "Error loading calibration: " + error.getMessage());
+                if (listener != null) {
+                    listener.onAnalysisError(error.getMessage());
+                }
+            }
+        });
+    }
+
 }
